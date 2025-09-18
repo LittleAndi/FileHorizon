@@ -11,6 +11,7 @@ public static class ServiceCollectionExtensions
         // Infrastructure defaults
         services.AddScoped<Abstractions.IFileProcessor, Infrastructure.FileProcessing.NoOpFileProcessor>();
         services.AddSingleton<Abstractions.IFileEventQueue, Infrastructure.Queue.InMemoryFileEventQueue>();
+        services.AddScoped<Abstractions.IFilePoller, Infrastructure.Polling.SyntheticFilePoller>();
         return services;
     }
 }
