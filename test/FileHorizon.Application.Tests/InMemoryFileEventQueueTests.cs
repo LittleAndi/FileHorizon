@@ -74,7 +74,7 @@ public class InMemoryFileEventQueueTests
     {
         var validator = new BasicFileEventValidator();
         IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance, validator);
-        var invalid = new FileEvent("", new FileMetadata("", -1, DateTimeOffset.UtcNow, "sha256", null), DateTimeOffset.UtcNow, "local", "");
+        var invalid = new FileEvent("", new FileMetadata("", -1, DateTimeOffset.UtcNow, "invalidhash", null), DateTimeOffset.UtcNow, "local", "");
         var r = await queue.EnqueueAsync(invalid, CancellationToken.None);
         Assert.True(r.IsFailure);
         Assert.Equal(Error.Validation.EmptyId.Code, r.Error.Code);
