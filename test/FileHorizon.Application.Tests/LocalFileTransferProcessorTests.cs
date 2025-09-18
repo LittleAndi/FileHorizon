@@ -35,10 +35,9 @@ public class LocalFileTransferProcessorTests
         var filePath = Path.Combine(srcDir, "sample.txt");
         await File.WriteAllTextAsync(filePath, "hello");
 
-        var destOpts = new OptionsMonitorStub<FileDestinationOptions>(new FileDestinationOptions { RootPath = dstDir, CreateDirectories = true });
         var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = true });
-        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = new List<FileSourceOptions> { new() { Path = srcDir, MoveAfterProcessing = false } } });
-        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, destOpts, featureOpts, sourcesOpts);
+        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = new List<FileSourceOptions> { new() { Path = srcDir, MoveAfterProcessing = false, DestinationPath = dstDir } } });
+        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, featureOpts, sourcesOpts);
         var fe = BuildEvent(filePath);
 
         var result = await processor.ProcessAsync(fe, CancellationToken.None);
@@ -60,10 +59,9 @@ public class LocalFileTransferProcessorTests
         var filePath = Path.Combine(srcDir, "sample.txt");
         await File.WriteAllTextAsync(filePath, "hello");
 
-        var destOpts = new OptionsMonitorStub<FileDestinationOptions>(new FileDestinationOptions { RootPath = dstDir, CreateDirectories = true });
         var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = true });
-        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = new List<FileSourceOptions> { new() { Path = srcDir, MoveAfterProcessing = true } } });
-        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, destOpts, featureOpts, sourcesOpts);
+        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = new List<FileSourceOptions> { new() { Path = srcDir, MoveAfterProcessing = true, DestinationPath = dstDir } } });
+        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, featureOpts, sourcesOpts);
         var fe = BuildEvent(filePath);
 
         var result = await processor.ProcessAsync(fe, CancellationToken.None);
@@ -85,15 +83,90 @@ public class LocalFileTransferProcessorTests
         var filePath = Path.Combine(srcDir, "sample.txt");
         await File.WriteAllTextAsync(filePath, "hello");
 
-        var destOpts = new OptionsMonitorStub<FileDestinationOptions>(new FileDestinationOptions { RootPath = Path.Combine(Path.GetTempPath(), "fh-disabled-dst") });
         var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = false });
-        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = new List<FileSourceOptions> { new() { Path = srcDir, MoveAfterProcessing = true } } });
-        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, destOpts, featureOpts, sourcesOpts);
+        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = new List<FileSourceOptions> { new() { Path = srcDir, MoveAfterProcessing = true, DestinationPath = Path.Combine(Path.GetTempPath(), "fh-disabled-dst") } } });
+        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, featureOpts, sourcesOpts);
         var fe = BuildEvent(filePath);
 
         var result = await processor.ProcessAsync(fe, CancellationToken.None);
         Assert.True(result.IsSuccess);
         Assert.True(File.Exists(filePath)); // unchanged
+
+        Directory.Delete(srcDir, true);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_PerSourceDestinations_AppliesCorrectTargets()
+    {
+        var srcDirA = Path.Combine(Path.GetTempPath(), "fh-srcA-" + Guid.NewGuid().ToString("N"));
+        var srcDirB = Path.Combine(Path.GetTempPath(), "fh-srcB-" + Guid.NewGuid().ToString("N"));
+        var dstDirA = Path.Combine(Path.GetTempPath(), "fh-dstA-" + Guid.NewGuid().ToString("N"));
+        var dstDirB = Path.Combine(Path.GetTempPath(), "fh-dstB-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(srcDirA);
+        Directory.CreateDirectory(srcDirB);
+        var fileA = Path.Combine(srcDirA, "a.txt");
+        var fileB = Path.Combine(srcDirB, "b.txt");
+        await File.WriteAllTextAsync(fileA, "A");
+        await File.WriteAllTextAsync(fileB, "B");
+
+        var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = true });
+        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions
+        {
+            Sources = new List<FileSourceOptions>
+            {
+                new() { Path = srcDirA, MoveAfterProcessing = false, DestinationPath = dstDirA },
+                new() { Path = srcDirB, MoveAfterProcessing = true, DestinationPath = dstDirB }
+            }
+        });
+        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, featureOpts, sourcesOpts);
+
+        var feA = BuildEvent(fileA);
+        var feB = BuildEvent(fileB);
+        var r1 = await processor.ProcessAsync(feA, CancellationToken.None);
+        var r2 = await processor.ProcessAsync(feB, CancellationToken.None);
+        Assert.True(r1.IsSuccess);
+        Assert.True(r2.IsSuccess);
+
+        var destFileA = Path.Combine(dstDirA, Path.GetFileName(fileA));
+        var destFileB = Path.Combine(dstDirB, Path.GetFileName(fileB));
+        Assert.True(File.Exists(destFileA));
+        Assert.True(File.Exists(destFileB));
+        // A was copy, original remains
+        Assert.True(File.Exists(fileA));
+        // B was move, original removed
+        Assert.False(File.Exists(fileB));
+
+        Directory.Delete(srcDirA, true);
+        Directory.Delete(srcDirB, true);
+        Directory.Delete(dstDirA, true);
+        Directory.Delete(dstDirB, true);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_NoCreateFlag_DestinationMissing_Skips()
+    {
+        var srcDir = Path.Combine(Path.GetTempPath(), "fh-nocreate-src-" + Guid.NewGuid().ToString("N"));
+        var dstDir = Path.Combine(Path.GetTempPath(), "fh-nocreate-dst-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(srcDir);
+        var filePath = Path.Combine(srcDir, "sample.txt");
+        await File.WriteAllTextAsync(filePath, "data");
+
+        // Intentionally do NOT create destination directory and set flag to false
+        var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = true });
+        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions
+        {
+            Sources = new List<FileSourceOptions>
+            {
+                new() { Path = srcDir, MoveAfterProcessing = false, DestinationPath = dstDir, CreateDestinationDirectories = false }
+            }
+        });
+        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, featureOpts, sourcesOpts);
+        var fe = BuildEvent(filePath);
+
+        var result = await processor.ProcessAsync(fe, CancellationToken.None);
+        Assert.True(result.IsSuccess); // skip still success result
+        Assert.True(File.Exists(filePath));
+        Assert.False(Directory.Exists(dstDir)); // not created
 
         Directory.Delete(srcDir, true);
     }

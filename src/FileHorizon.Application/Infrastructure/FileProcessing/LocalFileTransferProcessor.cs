@@ -14,18 +14,15 @@ namespace FileHorizon.Application.Infrastructure.FileProcessing;
 public sealed class LocalFileTransferProcessor : IFileProcessor
 {
     private readonly ILogger<LocalFileTransferProcessor> _logger;
-    private readonly IOptionsMonitor<FileDestinationOptions> _destOptions;
     private readonly IOptionsMonitor<PipelineFeaturesOptions> _featureOptions;
     private readonly IOptionsMonitor<FileSourcesOptions> _sourcesOptions;
 
     public LocalFileTransferProcessor(
         ILogger<LocalFileTransferProcessor> logger,
-        IOptionsMonitor<FileDestinationOptions> destOptions,
         IOptionsMonitor<PipelineFeaturesOptions> featureOptions,
         IOptionsMonitor<FileSourcesOptions> sourcesOptions)
     {
         _logger = logger;
-        _destOptions = destOptions;
         _featureOptions = featureOptions;
         _sourcesOptions = sourcesOptions;
     }
@@ -40,31 +37,11 @@ public sealed class LocalFileTransferProcessor : IFileProcessor
 
         try
         {
-            var destRoot = _destOptions.CurrentValue.RootPath;
-            if (string.IsNullOrWhiteSpace(destRoot))
-            {
-                _logger.LogWarning("Destination root path not configured; skipping transfer for {File}", fileEvent.Metadata.SourcePath);
-                return Task.FromResult(Result.Success());
-            }
             var sourcePath = fileEvent.Metadata.SourcePath;
-            if (!File.Exists(sourcePath))
-            {
-                _logger.LogWarning("Source file missing at processing time: {File}", sourcePath);
-                return Task.FromResult(Result.Failure(Error.File.NotFound(sourcePath)));
-            }
+            string? destRoot = null; // determined from matching source only
 
-            // Build destination path preserving relative folder structure (for now just file name)
-            var destFileName = Path.GetFileName(sourcePath);
-            var destinationPath = Path.Combine(destRoot, destFileName);
-
-            var createDirs = _destOptions.CurrentValue.CreateDirectories;
-            if (createDirs)
-            {
-                Directory.CreateDirectory(destRoot);
-            }
-
-            // Determine if source config wants move
-            bool move = false;
+            // Attempt to locate source configuration for potential per-source destination override & move flag
+            FileSourceOptions? matchedSource = null;
             try
             {
                 var sources = _sourcesOptions.CurrentValue?.Sources ?? new();
@@ -77,7 +54,7 @@ public sealed class LocalFileTransferProcessor : IFileProcessor
                         var root = Path.GetFullPath(s.Path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
                         if (normalizedFile.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                         {
-                            move = s.MoveAfterProcessing;
+                            matchedSource = s;
                             break;
                         }
                     }
@@ -86,8 +63,51 @@ public sealed class LocalFileTransferProcessor : IFileProcessor
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Error resolving source for move decision on {File}", sourcePath);
+                _logger.LogDebug(ex, "Error resolving source metadata for {File}", fileEvent.Metadata.SourcePath);
             }
+
+            destRoot = matchedSource?.DestinationPath;
+
+            if (string.IsNullOrWhiteSpace(destRoot))
+            {
+                _logger.LogWarning("No destination path configured for source of {File}; skipping transfer", fileEvent.Metadata.SourcePath);
+                return Task.FromResult(Result.Success());
+            }
+            // sourcePath already captured above
+            if (!File.Exists(sourcePath))
+            {
+                _logger.LogWarning("Source file missing at processing time: {File}", sourcePath);
+                return Task.FromResult(Result.Failure(Error.File.NotFound(sourcePath)));
+            }
+
+            // Build destination path. For now we only use the file name; future: preserve relative structure.
+            var destFileName = Path.GetFileName(sourcePath);
+            var destinationPath = Path.Combine(destRoot, destFileName);
+
+            var allowCreate = matchedSource?.CreateDestinationDirectories ?? true;
+            if (!Directory.Exists(destRoot))
+            {
+                if (allowCreate)
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(destRoot);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to create destination directory {Dest} for {File}", destRoot, sourcePath);
+                        return Task.FromResult(Result.Failure(Error.Unspecified("FileTransfer.DirectoryCreateFailed", ex.Message)));
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Destination directory {Dest} missing and creation disabled for source of {File}; skipping", destRoot, sourcePath);
+                    return Task.FromResult(Result.Success());
+                }
+            }
+
+            // Determine if source config wants move (default false if no match)
+            bool move = matchedSource?.MoveAfterProcessing == true;
 
             if (!move)
             {
