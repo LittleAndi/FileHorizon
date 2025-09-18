@@ -10,6 +10,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Core.IFileProcessingService, Core.FileProcessingService>();
         // Infrastructure defaults
         services.AddScoped<Abstractions.IFileProcessor, Infrastructure.FileProcessing.NoOpFileProcessor>();
+        services.AddSingleton<Abstractions.IFileEventQueue, Infrastructure.Queue.InMemoryFileEventQueue>();
         return services;
     }
 }
