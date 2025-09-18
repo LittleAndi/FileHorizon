@@ -73,4 +73,16 @@ public sealed class InMemoryFileEventQueue : IFileEventQueue
             }
         }
     }
+
+    public IReadOnlyCollection<FileEvent> TryDrain(int maxCount)
+    {
+        if (maxCount <= 0) return Array.Empty<FileEvent>();
+        var list = new List<FileEvent>(Math.Min(maxCount, 16));
+        while (list.Count < maxCount && _channel.Reader.TryRead(out var item))
+        {
+            _logger.LogDebug("Drained file event {FileId}", item.Id);
+            list.Add(item);
+        }
+        return list;
+    }
 }

@@ -40,6 +40,16 @@ public class LocalDirectoryPollerTests
                 }
             }
         }
+        public IReadOnlyCollection<FileEvent> TryDrain(int maxCount)
+        {
+            if (maxCount <= 0) return Array.Empty<FileEvent>();
+            var list = new List<FileEvent>();
+            while (list.Count < maxCount && _channel.Reader.TryRead(out var item))
+            {
+                list.Add(item);
+            }
+            return list;
+        }
     }
 
     [Fact]

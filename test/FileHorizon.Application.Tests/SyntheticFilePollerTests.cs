@@ -25,6 +25,12 @@ public class SyntheticFilePollerTests
                 await Task.Yield();
             }
         }
+        public IReadOnlyCollection<FileEvent> TryDrain(int maxCount)
+        {
+            if (maxCount <= 0 || Items.Count == 0) return Array.Empty<FileEvent>();
+            var take = Math.Min(maxCount, Items.Count);
+            return Items.Take(take).ToArray();
+        }
     }
 
     [Fact]

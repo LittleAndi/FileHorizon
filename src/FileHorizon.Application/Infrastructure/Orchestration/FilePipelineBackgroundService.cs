@@ -48,19 +48,22 @@ public sealed class FilePipelineBackgroundService : BackgroundService
                     _logger.LogWarning("Polling failed: {Error}", pollResult.Error);
                 }
 
-                // 2. Drain up to batch limit
-                var processed = 0;
+                // 2. Drain up to batch limit without blocking
                 var batchLimit = _options.CurrentValue.BatchReadLimit;
-                await foreach (var fe in _queue.DequeueAsync(stoppingToken))
+                var drained = _queue.TryDrain(batchLimit);
+                if (drained.Count > 0)
+                {
+                    _logger.LogDebug("Processing {Count} file events", drained.Count);
+                }
+                var processed = 0;
+                foreach (var fe in drained)
                 {
                     var result = await _processingService.HandleAsync(fe, stoppingToken).ConfigureAwait(false);
                     if (!result.IsSuccess)
                     {
                         _logger.LogWarning("Processing failure for {FileId}: {Error}", fe.Id, result.Error);
                     }
-
                     processed++;
-                    if (processed >= batchLimit) break;
                 }
 
                 // 3. Sleep until next cycle
