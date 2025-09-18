@@ -41,6 +41,8 @@ public sealed class FilePipelineBackgroundService : BackgroundService
             var interval = _options.CurrentValue.IntervalMilliseconds;
             try
             {
+                var cycleStart = DateTimeOffset.UtcNow;
+                _logger.LogDebug("Pipeline cycle start at {StartUtc} (interval {Interval}ms)", cycleStart, interval);
                 // 1. Poll source once per cycle
                 var pollResult = await _poller.PollAsync(stoppingToken).ConfigureAwait(false);
                 if (pollResult.IsFailure)
@@ -66,8 +68,18 @@ public sealed class FilePipelineBackgroundService : BackgroundService
                     processed++;
                 }
 
-                // 3. Sleep until next cycle
-                await Task.Delay(interval, stoppingToken).ConfigureAwait(false);
+                // 3. Sleep until next cycle accounting for work duration
+                var elapsed = (int)(DateTimeOffset.UtcNow - cycleStart).TotalMilliseconds;
+                if (elapsed > interval)
+                {
+                    _logger.LogWarning("Pipeline cycle overran interval: elapsed {Elapsed}ms > interval {Interval}ms", elapsed, interval);
+                }
+                else
+                {
+                    var remaining = interval - elapsed;
+                    await Task.Delay(remaining, stoppingToken).ConfigureAwait(false);
+                }
+                _logger.LogDebug("Pipeline cycle end (elapsed {Elapsed}ms)", elapsed);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
