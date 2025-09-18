@@ -9,7 +9,7 @@ public static class ServiceCollectionExtensions
         // Core services
         services.AddSingleton<Core.IFileProcessingService, Core.FileProcessingService>();
         // Infrastructure defaults
-        services.AddSingleton<Abstractions.IFileProcessor, Infrastructure.FileProcessing.NoOpFileProcessor>();
+        services.AddSingleton<Abstractions.IFileProcessor, Infrastructure.FileProcessing.LocalFileTransferProcessor>();
         services.AddSingleton<Abstractions.IFileEventQueue, Infrastructure.Queue.InMemoryFileEventQueue>();
         // Pollers: register concrete implementations then selector facade
         services.AddSingleton<Infrastructure.Polling.SyntheticFilePoller>();
