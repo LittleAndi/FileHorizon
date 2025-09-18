@@ -3,6 +3,7 @@ using FileHorizon.Application.Infrastructure.Queue;
 using FileHorizon.Application.Models;
 using FileHorizon.Application.Common;
 using Microsoft.Extensions.Logging.Abstractions;
+using FileHorizon.Application.Validation;
 
 namespace FileHorizon.Application.Tests;
 
@@ -18,7 +19,8 @@ public class InMemoryFileEventQueueTests
     [Fact]
     public async Task Enqueue_Then_Dequeue_Single_Item()
     {
-        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance);
+        var validator = new BasicFileEventValidator();
+        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance, validator);
         var ev = NewEvent("one");
         var r = await queue.EnqueueAsync(ev, CancellationToken.None);
         Assert.True(r.IsSuccess);
@@ -34,7 +36,8 @@ public class InMemoryFileEventQueueTests
     [Fact]
     public async Task Enqueue_Multiple_Preserves_Order()
     {
-        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance);
+        var validator = new BasicFileEventValidator();
+        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance, validator);
         var ev1 = NewEvent("one");
         var ev2 = NewEvent("two");
         await queue.EnqueueAsync(ev1, CancellationToken.None);
@@ -53,7 +56,8 @@ public class InMemoryFileEventQueueTests
     [Fact]
     public async Task Cancellation_Stops_Dequeue()
     {
-        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance);
+        var validator = new BasicFileEventValidator();
+        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance, validator);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -63,5 +67,16 @@ public class InMemoryFileEventQueueTests
             enumerated = true;
         }
         Assert.False(enumerated);
+    }
+
+    [Fact]
+    public async Task Enqueue_Invalid_Event_Should_Return_Failure()
+    {
+        var validator = new BasicFileEventValidator();
+        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance, validator);
+        var invalid = new FileEvent("", new FileMetadata("", -1, DateTimeOffset.UtcNow, "sha256", null), DateTimeOffset.UtcNow, "local", "");
+        var r = await queue.EnqueueAsync(invalid, CancellationToken.None);
+        Assert.True(r.IsFailure);
+        Assert.Equal(Error.Validation.EmptyId.Code, r.Error.Code);
     }
 }

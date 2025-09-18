@@ -12,6 +12,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Abstractions.IFileProcessor, Infrastructure.FileProcessing.NoOpFileProcessor>();
         services.AddSingleton<Abstractions.IFileEventQueue, Infrastructure.Queue.InMemoryFileEventQueue>();
         services.AddScoped<Abstractions.IFilePoller, Infrastructure.Polling.SyntheticFilePoller>();
+        services.AddSingleton<Abstractions.IFileEventValidator, Validation.BasicFileEventValidator>();
         return services;
     }
 }

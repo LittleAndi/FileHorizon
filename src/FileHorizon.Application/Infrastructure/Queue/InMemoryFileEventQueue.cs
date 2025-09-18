@@ -14,10 +14,12 @@ public sealed class InMemoryFileEventQueue : IFileEventQueue
 {
     private readonly Channel<FileEvent> _channel;
     private readonly ILogger<InMemoryFileEventQueue> _logger;
+    private readonly IFileEventValidator _validator;
 
-    public InMemoryFileEventQueue(ILogger<InMemoryFileEventQueue> logger)
+    public InMemoryFileEventQueue(ILogger<InMemoryFileEventQueue> logger, IFileEventValidator validator)
     {
         _logger = logger;
+        _validator = validator;
         var options = new UnboundedChannelOptions
         {
             AllowSynchronousContinuations = false,
@@ -30,6 +32,12 @@ public sealed class InMemoryFileEventQueue : IFileEventQueue
 
     public Task<Result> EnqueueAsync(FileEvent fileEvent, CancellationToken ct)
     {
+        var validation = _validator.Validate(fileEvent);
+        if (validation.IsFailure)
+        {
+            _logger.LogDebug("Validation failed for file event {FileId}: {Error}", fileEvent?.Id, validation.Error);
+            return Task.FromResult(Result.Failure(validation.Error));
+        }
         if (ct.IsCancellationRequested)
         {
             _logger.LogDebug("Enqueue cancelled for file {FileId}", fileEvent.Id);

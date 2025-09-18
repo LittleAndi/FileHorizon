@@ -60,6 +60,16 @@ public readonly record struct Error(string Code, string Message)
         public static readonly Error AlreadyProcessed = new("Processing.AlreadyProcessed", "File already processed");
         public static readonly Error ChecksumMismatch = new("Processing.ChecksumMismatch", "Checksum mismatch");
     }
+
+    public static class Validation
+    {
+        public static Error Invalid(string reason) => new("Validation.Invalid", reason);
+        public static readonly Error NullFileEvent = new("Validation.NullFileEvent", "FileEvent was null");
+        public static readonly Error EmptyId = new("Validation.EmptyId", "FileEvent Id was null or whitespace");
+        public static readonly Error NullMetadata = new("Validation.NullMetadata", "FileEvent.Metadata was null");
+        public static readonly Error EmptySourcePath = new("Validation.EmptySourcePath", "File metadata SourcePath was null or whitespace");
+        public static readonly Error NegativeSize = new("Validation.NegativeSize", "File size must be >= 0");
+    }
 }
 
 public static class Guard
