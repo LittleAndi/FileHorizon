@@ -16,15 +16,18 @@ public sealed class LocalFileTransferProcessor : IFileProcessor
     private readonly ILogger<LocalFileTransferProcessor> _logger;
     private readonly IOptionsMonitor<FileDestinationOptions> _destOptions;
     private readonly IOptionsMonitor<PipelineFeaturesOptions> _featureOptions;
+    private readonly IOptionsMonitor<FileSourcesOptions> _sourcesOptions;
 
     public LocalFileTransferProcessor(
         ILogger<LocalFileTransferProcessor> logger,
         IOptionsMonitor<FileDestinationOptions> destOptions,
-        IOptionsMonitor<PipelineFeaturesOptions> featureOptions)
+        IOptionsMonitor<PipelineFeaturesOptions> featureOptions,
+        IOptionsMonitor<FileSourcesOptions> sourcesOptions)
     {
         _logger = logger;
         _destOptions = destOptions;
         _featureOptions = featureOptions;
+        _sourcesOptions = sourcesOptions;
     }
 
     public Task<Result> ProcessAsync(FileEvent fileEvent, CancellationToken ct)
@@ -60,8 +63,33 @@ public sealed class LocalFileTransferProcessor : IFileProcessor
                 Directory.CreateDirectory(destRoot);
             }
 
-            var copyMode = _featureOptions.CurrentValue.CopyInsteadOfMove;
-            if (copyMode)
+            // Determine if source config wants move
+            bool move = false;
+            try
+            {
+                var sources = _sourcesOptions.CurrentValue?.Sources ?? new();
+                var normalizedFile = Path.GetFullPath(sourcePath);
+                foreach (var s in sources)
+                {
+                    if (string.IsNullOrWhiteSpace(s.Path)) continue;
+                    try
+                    {
+                        var root = Path.GetFullPath(s.Path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                        if (normalizedFile.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                        {
+                            move = s.MoveAfterProcessing;
+                            break;
+                        }
+                    }
+                    catch { /* ignore normalization errors */ }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error resolving source for move decision on {File}", sourcePath);
+            }
+
+            if (!move)
             {
                 File.Copy(sourcePath, destinationPath, overwrite: true);
                 _logger.LogInformation("Copied file {Source} to {Destination}", sourcePath, destinationPath);

@@ -36,8 +36,9 @@ public class LocalFileTransferProcessorTests
         await File.WriteAllTextAsync(filePath, "hello");
 
         var destOpts = new OptionsMonitorStub<FileDestinationOptions>(new FileDestinationOptions { RootPath = dstDir, CreateDirectories = true });
-        var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = true, CopyInsteadOfMove = true });
-        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, destOpts, featureOpts);
+        var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = true });
+        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = new List<FileSourceOptions> { new() { Path = srcDir, MoveAfterProcessing = false } } });
+        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, destOpts, featureOpts, sourcesOpts);
         var fe = BuildEvent(filePath);
 
         var result = await processor.ProcessAsync(fe, CancellationToken.None);
@@ -60,8 +61,9 @@ public class LocalFileTransferProcessorTests
         await File.WriteAllTextAsync(filePath, "hello");
 
         var destOpts = new OptionsMonitorStub<FileDestinationOptions>(new FileDestinationOptions { RootPath = dstDir, CreateDirectories = true });
-        var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = true, CopyInsteadOfMove = false });
-        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, destOpts, featureOpts);
+        var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = true });
+        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = new List<FileSourceOptions> { new() { Path = srcDir, MoveAfterProcessing = true } } });
+        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, destOpts, featureOpts, sourcesOpts);
         var fe = BuildEvent(filePath);
 
         var result = await processor.ProcessAsync(fe, CancellationToken.None);
@@ -85,7 +87,8 @@ public class LocalFileTransferProcessorTests
 
         var destOpts = new OptionsMonitorStub<FileDestinationOptions>(new FileDestinationOptions { RootPath = Path.Combine(Path.GetTempPath(), "fh-disabled-dst") });
         var featureOpts = new OptionsMonitorStub<PipelineFeaturesOptions>(new PipelineFeaturesOptions { EnableFileTransfer = false });
-        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, destOpts, featureOpts);
+        var sourcesOpts = new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = new List<FileSourceOptions> { new() { Path = srcDir, MoveAfterProcessing = true } } });
+        var processor = new LocalFileTransferProcessor(NullLogger<LocalFileTransferProcessor>.Instance, destOpts, featureOpts, sourcesOpts);
         var fe = BuildEvent(filePath);
 
         var result = await processor.ProcessAsync(fe, CancellationToken.None);
