@@ -70,3 +70,23 @@
 
 ---
 Generated scaffold prepared for incremental additions.
+
+## Orchestrator (Implemented)
+- Background service `FilePipelineBackgroundService` now:
+	- Invokes `IFilePoller` once per interval.
+	- Drains up to `BatchReadLimit` events from `IFileEventQueue`.
+	- Processes each via `IFileProcessingService`.
+- Configured via `Polling` options (IntervalMilliseconds, BatchReadLimit) bound in Host.
+
+### Immediate Next Increment Ideas
+1. Add structured logging context (file id, protocol) in processing path.
+2. Introduce basic validation (size >= 0, path non-empty) before enqueue/processing.
+3. Add graceful shutdown test (simulate cancellation token) for orchestrator loop (integration test).
+4. Provide metrics abstraction placeholder (counters: polled, enqueued, processed, failures).
+5. Implement a simple in-memory de-dup registry to prep for idempotency work.
+
+### Tech Debt / Follow-Ups
+- Replace naive polling delay with adaptive sleep (short circuit if queue still has backlog).
+- Consider partial parallel processing (bounded degree) once FileProcessingService performs real I/O.
+- Evaluate using `PeriodicTimer` for clarity over Task.Delay loop.
+
