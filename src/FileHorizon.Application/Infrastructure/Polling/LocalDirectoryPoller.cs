@@ -18,6 +18,7 @@ public sealed class LocalDirectoryPoller : IFilePoller
     private readonly ILogger<LocalDirectoryPoller> _logger;
     private readonly IOptionsMonitor<FileSourcesOptions> _sourcesOptions;
     private readonly ConcurrentDictionary<string, DateTimeOffset> _seenFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _disabledSources = new(StringComparer.OrdinalIgnoreCase);
 
     public LocalDirectoryPoller(
         IFileEventQueue queue,
@@ -27,6 +28,8 @@ public sealed class LocalDirectoryPoller : IFilePoller
         _queue = queue;
         _logger = logger;
         _sourcesOptions = sourcesOptions;
+        // When configuration changes, clear disabled sources so new/updated paths are re-evaluated
+        _sourcesOptions.OnChange(_ => _disabledSources.Clear());
     }
 
     public async Task<Result> PollAsync(CancellationToken ct)
@@ -41,9 +44,18 @@ public sealed class LocalDirectoryPoller : IFilePoller
         foreach (var source in sources)
         {
             if (ct.IsCancellationRequested) break;
+            // Normalize key for disabled tracking
+            var sourceKey = source.Path ?? string.Empty;
+            if (_disabledSources.ContainsKey(sourceKey))
+            {
+                _logger.LogTrace("Skipping previously disabled source {SourceName} ({Path})", source.Name, source.Path);
+                continue;
+            }
+
             if (string.IsNullOrWhiteSpace(source.Path) || !Directory.Exists(source.Path))
             {
-                _logger.LogWarning("Source path invalid or does not exist for source {SourceName}: {Path}", source.Name, source.Path);
+                _logger.LogWarning("Disabling source {SourceName} - path invalid or does not exist: {Path}", source.Name, source.Path);
+                _disabledSources[sourceKey] = 1;
                 continue;
             }
 
