@@ -1,6 +1,7 @@
 using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Common;
 using FileHorizon.Application.Models;
+using Microsoft.Extensions.Logging;
 
 namespace FileHorizon.Application.Infrastructure.Polling;
 
@@ -11,16 +12,19 @@ namespace FileHorizon.Application.Infrastructure.Polling;
 public sealed class SyntheticFilePoller : IFilePoller
 {
     private readonly IFileEventQueue _queue;
+    private readonly ILogger<SyntheticFilePoller> _logger;
 
-    public SyntheticFilePoller(IFileEventQueue queue)
+    public SyntheticFilePoller(IFileEventQueue queue, ILogger<SyntheticFilePoller> logger)
     {
         _queue = queue;
+        _logger = logger;
     }
 
     public async Task<Result> PollAsync(CancellationToken ct)
     {
         if (ct.IsCancellationRequested)
         {
+            _logger.LogDebug("Polling cancelled before execution");
             return Result.Failure(Error.Unspecified("Poller.Cancelled", "Poll was cancelled"));
         }
 
@@ -39,7 +43,12 @@ public sealed class SyntheticFilePoller : IFilePoller
             DiscoveredAtUtc: now,
             Protocol: "synthetic",
             DestinationPath: sourcePath);
-
-        return await _queue.EnqueueAsync(fe, ct).ConfigureAwait(false);
+        _logger.LogTrace("Generated synthetic file event {FileId}", id);
+        var result = await _queue.EnqueueAsync(fe, ct).ConfigureAwait(false);
+        if (!result.IsSuccess)
+        {
+            _logger.LogWarning("Failed to enqueue synthetic event {FileId}: {Error}", id, result.Error);
+        }
+        return result;
     }
 }

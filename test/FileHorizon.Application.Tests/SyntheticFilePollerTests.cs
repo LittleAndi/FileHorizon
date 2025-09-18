@@ -3,6 +3,7 @@ using FileHorizon.Application.Common;
 using FileHorizon.Application.Infrastructure.Polling;
 using FileHorizon.Application.Infrastructure.Queue;
 using FileHorizon.Application.Models;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FileHorizon.Application.Tests;
 
@@ -30,7 +31,7 @@ public class SyntheticFilePollerTests
     public async Task PollAsync_Should_Enqueue_Exactly_One_Event()
     {
         var queue = new CapturingQueue();
-        IFilePoller poller = new SyntheticFilePoller(queue);
+        IFilePoller poller = new SyntheticFilePoller(queue, NullLogger<SyntheticFilePoller>.Instance);
 
         var result = await poller.PollAsync(CancellationToken.None);
 

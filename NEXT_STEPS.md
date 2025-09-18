@@ -85,6 +85,14 @@ Generated scaffold prepared for incremental additions.
 4. Provide metrics abstraction placeholder (counters: polled, enqueued, processed, failures).
 5. Implement a simple in-memory de-dup registry to prep for idempotency work.
 
+### Logging (Implemented Increment)
+- Added ILogger injection to: FileProcessingService, InMemoryFileEventQueue, SyntheticFilePoller.
+- Levels used:
+	- Debug/Trace: routine lifecycle (processing start, dequeue, synthetic event generation)
+	- Warning: failures (enqueue rejection, processing failure, poll enqueue failure)
+	- Information: queue initialization, service start/stop (background service already had info logs)
+- Tests updated to use NullLogger to keep output clean.
+
 ### Tech Debt / Follow-Ups
 - Replace naive polling delay with adaptive sleep (short circuit if queue still has backlog).
 - Consider partial parallel processing (bounded degree) once FileProcessingService performs real I/O.

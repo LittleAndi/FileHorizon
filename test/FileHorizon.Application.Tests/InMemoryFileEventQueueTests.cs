@@ -2,6 +2,7 @@ using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Infrastructure.Queue;
 using FileHorizon.Application.Models;
 using FileHorizon.Application.Common;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FileHorizon.Application.Tests;
 
@@ -17,7 +18,7 @@ public class InMemoryFileEventQueueTests
     [Fact]
     public async Task Enqueue_Then_Dequeue_Single_Item()
     {
-        IFileEventQueue queue = new InMemoryFileEventQueue();
+        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance);
         var ev = NewEvent("one");
         var r = await queue.EnqueueAsync(ev, CancellationToken.None);
         Assert.True(r.IsSuccess);
@@ -33,7 +34,7 @@ public class InMemoryFileEventQueueTests
     [Fact]
     public async Task Enqueue_Multiple_Preserves_Order()
     {
-        IFileEventQueue queue = new InMemoryFileEventQueue();
+        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance);
         var ev1 = NewEvent("one");
         var ev2 = NewEvent("two");
         await queue.EnqueueAsync(ev1, CancellationToken.None);
@@ -52,7 +53,7 @@ public class InMemoryFileEventQueueTests
     [Fact]
     public async Task Cancellation_Stops_Dequeue()
     {
-        IFileEventQueue queue = new InMemoryFileEventQueue();
+        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 

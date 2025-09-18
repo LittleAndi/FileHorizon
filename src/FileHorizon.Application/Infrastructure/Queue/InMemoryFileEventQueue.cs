@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Common;
 using FileHorizon.Application.Models;
+using Microsoft.Extensions.Logging;
 
 namespace FileHorizon.Application.Infrastructure.Queue;
 
@@ -12,9 +13,11 @@ namespace FileHorizon.Application.Infrastructure.Queue;
 public sealed class InMemoryFileEventQueue : IFileEventQueue
 {
     private readonly Channel<FileEvent> _channel;
+    private readonly ILogger<InMemoryFileEventQueue> _logger;
 
-    public InMemoryFileEventQueue()
+    public InMemoryFileEventQueue(ILogger<InMemoryFileEventQueue> logger)
     {
+        _logger = logger;
         var options = new UnboundedChannelOptions
         {
             AllowSynchronousContinuations = false,
@@ -22,19 +25,23 @@ public sealed class InMemoryFileEventQueue : IFileEventQueue
             SingleWriter = false
         };
         _channel = Channel.CreateUnbounded<FileEvent>(options);
+        _logger.LogInformation("InMemoryFileEventQueue initialized");
     }
 
     public Task<Result> EnqueueAsync(FileEvent fileEvent, CancellationToken ct)
     {
         if (ct.IsCancellationRequested)
         {
+            _logger.LogDebug("Enqueue cancelled for file {FileId}", fileEvent.Id);
             return Task.FromResult(Result.Failure(Error.Unspecified("Queue.EnqueueCancelled", "Enqueue was cancelled")));
         }
 
         if (!_channel.Writer.TryWrite(fileEvent))
         {
+            _logger.LogWarning("Failed to enqueue file event {FileId} - queue full/rejected", fileEvent.Id);
             return Task.FromResult(Result.Failure(Error.Unspecified("Queue.Full", "Queue rejected the item")));
         }
+        _logger.LogDebug("Enqueued file event {FileId}", fileEvent.Id);
         return Task.FromResult(Result.Success());
     }
 
@@ -52,6 +59,7 @@ public sealed class InMemoryFileEventQueue : IFileEventQueue
             }
             while (_channel.Reader.TryRead(out var item))
             {
+                _logger.LogDebug("Dequeued file event {FileId}", item.Id);
                 yield return item;
                 if (ct.IsCancellationRequested) yield break;
             }

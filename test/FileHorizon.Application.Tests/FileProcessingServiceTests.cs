@@ -2,6 +2,7 @@ using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Common;
 using FileHorizon.Application.Core;
 using FileHorizon.Application.Models;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FileHorizon.Application.Tests;
 
@@ -34,7 +35,7 @@ public class FileProcessingServiceTests
 
         var expected = Result.Success();
         var testProcessor = new TestFileProcessor((fe, ct) => Task.FromResult(expected));
-        var svc = new FileProcessingService(testProcessor);
+        var svc = new FileProcessingService(testProcessor, NullLogger<FileProcessingService>.Instance);
 
         var result = await svc.HandleAsync(fileEvent, CancellationToken.None);
 
