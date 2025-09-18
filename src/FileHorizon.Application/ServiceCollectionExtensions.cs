@@ -8,6 +8,8 @@ public static class ServiceCollectionExtensions
     {
         // Core services
         services.AddScoped<Core.IFileProcessingService, Core.FileProcessingService>();
+        // Infrastructure defaults
+        services.AddScoped<Abstractions.IFileProcessor, Infrastructure.FileProcessing.NoOpFileProcessor>();
         return services;
     }
 }

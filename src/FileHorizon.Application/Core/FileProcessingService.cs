@@ -9,7 +9,7 @@ public interface IFileProcessingService
     Task<Result> HandleAsync(FileEvent fileEvent, CancellationToken ct);
 }
 
-internal sealed class FileProcessingService : IFileProcessingService
+public sealed class FileProcessingService : IFileProcessingService
 {
     private readonly IFileProcessor _fileProcessor;
 
