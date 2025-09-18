@@ -11,7 +11,10 @@ public static class ServiceCollectionExtensions
         // Infrastructure defaults
         services.AddScoped<Abstractions.IFileProcessor, Infrastructure.FileProcessing.NoOpFileProcessor>();
         services.AddSingleton<Abstractions.IFileEventQueue, Infrastructure.Queue.InMemoryFileEventQueue>();
-        services.AddScoped<Abstractions.IFilePoller, Infrastructure.Polling.SyntheticFilePoller>();
+        // Pollers: register concrete implementations then selector facade
+        services.AddScoped<Infrastructure.Polling.SyntheticFilePoller>();
+        services.AddScoped<Infrastructure.Polling.LocalDirectoryPoller>();
+        services.AddScoped<Abstractions.IFilePoller, Infrastructure.Polling.PollerSelector>();
         services.AddSingleton<Abstractions.IFileEventValidator, Validation.BasicFileEventValidator>();
         return services;
     }
