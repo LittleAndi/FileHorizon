@@ -32,6 +32,11 @@ public sealed class PollerSelector : IFilePoller
     public Task<Result> PollAsync(CancellationToken ct)
     {
         var features = _featureOptions.CurrentValue;
+        if (features is not null && !features.EnablePolling)
+        {
+            _logger.LogTrace("Polling disabled via feature flag");
+            return Task.FromResult(Result.Success());
+        }
         if (features is not null && features.UseSyntheticPoller)
         {
             _logger.LogTrace("Using synthetic poller");

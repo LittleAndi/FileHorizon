@@ -125,6 +125,8 @@ The compose file sets sensible defaults:
   - `FileSources__Sources__1__Name=InboxB`
   - `FileSources__Sources__1__Path=/data/inboxB`
 - Change `Features__EnableFileTransfer` to `true` to perform actual file transfers once implemented.
+- `Features__EnablePolling` master switch for any polling (synthetic or directory). Set `false` on pure worker replicas.
+- `Features__EnableProcessing` master switch for processing/dequeuing work; set `false` if you want a poller-only instance that just enqueues (rare) or for diagnostic dry runs.
 
 You can override any value using an `.env` file placed next to `docker-compose.yml`:
 
@@ -157,6 +159,35 @@ nerdctl compose up -d --build --scale app=2
 ```
 
 Each replica will create a unique consumer name derived from `Redis__ConsumerNamePrefix` ensuring cooperative consumption via the shared consumer group.
+For a clean separation:
+
+Example: one poller + multiple workers
+
+```
+# poller (enqueue only, no processing)
+Features__EnablePolling=true
+Features__EnableProcessing=false
+Features__EnableFileTransfer=false
+
+# worker (process only)
+Features__EnablePolling=false
+Features__EnableProcessing=true
+Features__EnableFileTransfer=true
+```
+
+Alternatively (common simpler pattern):
+
+```
+# single poller that also processes
+Features__EnablePolling=true
+Features__EnableProcessing=true
+Features__EnableFileTransfer=true
+
+# additional workers (no polling)
+Features__EnablePolling=false
+Features__EnableProcessing=true
+Features__EnableFileTransfer=true
+```
 
 > Reminder (WSL + containerd): If you previously built with `docker build`, rebuild with `nerdctl build` to ensure the image exists in the containerd image store before scaling.
 
