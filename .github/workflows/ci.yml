@@ -33,6 +33,7 @@ jobs:
         with:
           dotnet-version: ${{ matrix.dotnet }}
           cache: true
+          cache-dependency-path: "**/packages.lock.json"
 
       - name: Restore
         run: dotnet restore FileHorizon.sln
