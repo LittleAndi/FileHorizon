@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Quick start:
 # 1. docker compose up -d --build
 # 2. Visit health endpoint: http://localhost:8080/health
@@ -22,17 +20,22 @@ services:
       retries: 5
       start_period: 5s
 
-  app:
+  poller:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: filehorizon-app
-    depends_on:
-      redis:
-        condition: service_healthy
     environment:
-      ASPNETCORE_URLS: http://+:8080
-      ASPNETCORE_ENVIRONMENT: Development
+      Logging__LogLevel__Default: Information
+      Logging__LogLevel__Microsoft: Warning
+      Logging__LogLevel__Microsoft.Hosting.Lifetime: Information
+      Logging__LogLevel__FileHorizon: Information
+      # Feature flags
+      Features__EnablePolling: "true"
+      Features__EnableProcessing: "false"
+      Features__EnableFileTransfer: "false"
+      # Polling behavior
+      Polling__IntervalMilliseconds: 1000
+      Polling__BatchReadLimit: 10
       # Enable Redis queue
       Redis__Enabled: "true"
       Redis__Host: redis
@@ -40,20 +43,19 @@ services:
       Redis__StreamName: filehorizon:file-events
       Redis__ConsumerGroup: filehorizon-workers
       Redis__ConsumerNamePrefix: fh
-      # Feature flags
-      Features__UseSyntheticPoller: "true"
-      Features__EnableFileTransfer: "false"
-      # Polling behavior
-      Polling__IntervalMilliseconds: 1000
-      Polling__BatchReadLimit: 10
       # Example file sources (adjust host paths as needed)
       FileSources__Sources__0__Name: InboxA
       FileSources__Sources__0__Path: /data/inboxA
       FileSources__Sources__0__Pattern: "*.*"
       FileSources__Sources__0__Recursive: "true"
       FileSources__Sources__0__DestinationPath: /data/outboxA
+      FileSources__Sources__1__Name: InboxB
+      FileSources__Sources__1__Path: /data/inboxB
+      FileSources__Sources__1__Pattern: "*.*"
+      FileSources__Sources__1__Recursive: "true"
+      FileSources__Sources__1__DestinationPath: /data/outboxB
     ports:
-      - "8080:8080"
+      - "8080:8080" # only this one is published
     volumes:
       - type: bind
         source: ./_data/inboxA
@@ -61,6 +63,73 @@ services:
       - type: bind
         source: ./_data/outboxA
         target: /data/outboxA
+      - type: bind
+        source: ./_data/inboxB
+        target: /data/inboxB
+      - type: bind
+        source: ./_data/outboxB
+        target: /data/outboxB
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      Logging__LogLevel__Default: Warning
+      Logging__LogLevel__Microsoft: Warning
+      Logging__LogLevel__Microsoft.Hosting.Lifetime: Warning
+      Logging__LogLevel__FileHorizon: Information
+      # Feature flags
+      Features__EnablePolling: "false"
+      Features__EnableProcessing: "true"
+      Features__EnableFileTransfer: "true"
+      # Polling behavior
+      Polling__IntervalMilliseconds: 1000
+      Polling__BatchReadLimit: 10
+      # Enable Redis queue
+      Redis__Enabled: "true"
+      Redis__Host: redis
+      Redis__Port: 6379
+      Redis__StreamName: filehorizon:file-events
+      Redis__ConsumerGroup: filehorizon-workers
+      Redis__ConsumerNamePrefix: fh
+      # Example file sources (adjust host paths as needed), needs to match the poller file sources
+      FileSources__Sources__0__Name: InboxA
+      FileSources__Sources__0__Path: /data/inboxA
+      FileSources__Sources__0__Pattern: "*.*"
+      FileSources__Sources__0__Recursive: "true"
+      FileSources__Sources__0__MoveAfterProcessing: "true"
+      FileSources__Sources__0__DestinationPath: /data/outboxA
+      FileSources__Sources__0__CreateDestinationDirectories: "true"
+      FileSources__Sources__1__Name: InboxB
+      FileSources__Sources__1__Path: /data/inboxB
+      FileSources__Sources__1__Pattern: "*.*"
+      FileSources__Sources__1__Recursive: "true"
+      FileSources__Sources__1__MoveAfterProcessing: "true"
+      FileSources__Sources__1__DestinationPath: /data/outboxB
+      FileSources__Sources__1__CreateDestinationDirectories: "true"
+    deploy:
+      replicas: 3
+    volumes:
+      - type: bind
+        source: ./_data/inboxA
+        target: /data/inboxA
+      - type: bind
+        source: ./_data/outboxA
+        target: /data/outboxA
+      - type: bind
+        source: ./_data/inboxB
+        target: /data/inboxB
+      - type: bind
+        source: ./_data/outboxB
+        target: /data/outboxB
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 15s

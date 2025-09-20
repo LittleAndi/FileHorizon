@@ -194,6 +194,21 @@ Features__EnableFileTransfer=true
 
 > Reminder (WSL + containerd): If you previously built with `docker build`, rebuild with `nerdctl build` to ensure the image exists in the containerd image store before scaling.
 
+#### Generating files
+
+Use these commands (or similar) to generate lots of files quickly in the inboxes.
+
+```
+seq 1 1000 | xargs -I{} -P 8 sh -c 'echo "test" > inboxA/file{}.txt'
+seq 1 1000 | xargs -I{} -P 8 sh -c 'echo "test" > inboxB/file{}.txt'
+```
+
+To count files i a folder you can use
+
+```
+find . -maxdepth 1 -type f | wc -l
+```
+
 ### Future Hardening Ideas
 
 - Switch to distroless or `-alpine` base (after validating native dependencies).
