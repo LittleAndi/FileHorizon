@@ -75,6 +75,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
@@ -136,6 +139,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    depends_on:
+      poller:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
