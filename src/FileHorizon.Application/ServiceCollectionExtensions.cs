@@ -15,10 +15,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Abstractions.IFileProcessor, Infrastructure.FileProcessing.LocalFileTransferProcessor>();
         services.AddSingleton<Abstractions.IFileEventValidator, Validation.BasicFileEventValidator>();
 
-        // Register pollers (concrete) then selector facade
-        services.AddSingleton<Infrastructure.Polling.SyntheticFilePoller>();
+        // Register only the real local directory poller
         services.AddSingleton<Infrastructure.Polling.LocalDirectoryPoller>();
-        services.AddSingleton<Abstractions.IFilePoller, Infrastructure.Polling.PollerSelector>();
+        services.AddSingleton<Abstractions.IFilePoller>(sp => sp.GetRequiredService<Infrastructure.Polling.LocalDirectoryPoller>());
 
         // Conditional queue registration: attempt Redis if enabled, else fallback to in-memory.
         services.AddSingleton<Abstractions.IFileEventQueue>(sp =>

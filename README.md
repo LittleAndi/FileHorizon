@@ -54,7 +54,8 @@ Runtime configuration is provided via `appsettings.json` / environment variables
 
 ```
 docker run --rm -p 8080:8080 \
-	-e "Features__UseSyntheticPoller=false" \
+	-e "Features__EnablePolling=true" \
+	-e "Features__EnableProcessing=true" \
 	-e "Features__EnableFileTransfer=true" \
 	filehorizon:dev
 ```
@@ -132,7 +133,9 @@ You can override any value using an `.env` file placed next to `docker-compose.y
 
 ```
 # .env example
-FEATURES__USESYNTHETICPOLLER=false
+FEATURES__ENABLEPOLLING=true
+FEATURES__ENABLEPROCESSING=true
+FEATURES__ENABLEFILETRANSFER=false
 REDIS__ENABLED=true
 POLLING__INTERVALMILLISECONDS=500
 ```

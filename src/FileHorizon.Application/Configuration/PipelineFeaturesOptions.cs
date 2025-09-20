@@ -3,7 +3,6 @@ namespace FileHorizon.Application.Configuration;
 public sealed class PipelineFeaturesOptions
 {
     public const string SectionName = "Features";
-    public bool UseSyntheticPoller { get; set; } = true; // default keeps prior behavior
     public bool EnableFileTransfer { get; set; } = false; // gate real file copy/move
     /// <summary>
     /// Master switch for any polling activity (synthetic or directory). When false, no poller will enqueue new events.
