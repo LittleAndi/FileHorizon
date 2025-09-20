@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, "feat/**", "fix/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+  statuses: write
+  pull-requests: write
+
+jobs:
+  build-test:
+    name: Build & Test (${{ matrix.os }} / .NET ${{ matrix.dotnet }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        dotnet: ["8.0.x"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet }}
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Restore (generate / update lock files)
+        run: dotnet restore FileHorizon.sln
+
+      - name: Fail if lock files changed
+        run: |
+          git diff --name-only --exit-code || (
+            echo "Detected changes to lock files. Please commit updated packages.lock.json." && exit 1
+          )
+
+      - name: Locked restore validation
+        run: dotnet restore FileHorizon.sln --locked-mode
+
+      - name: Build
+        run: dotnet build FileHorizon.sln --configuration Release --no-restore /warnaserror
+
+      - name: Test
+        run: dotnet test FileHorizon.sln --configuration Release --no-build --logger trx --collect "XPlat Code Coverage" --results-directory TestResults
+
+      - name: Report coverage summary
+        if: always()
+        run: |
+          echo "Coverage files:";
+          ls -R TestResults || dir TestResults
+
+      - name: Publish Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: TestResults
+
+      - name: Publish Code Coverage (cobertura)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: |
+            **/coverage.cobertura.xml
+            **/coverage.info
+            **/coverage.json
+
+  # Optional separate job to aggregate coverage in future

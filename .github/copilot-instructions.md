@@ -23,26 +23,27 @@ Expected structure (initial):
 
 ```
 src/
-	FileHorizon.Host/              # ASP.NET Core (or console) entry point; minimal logic
-	FileHorizon.Application/       # Consolidated functional code (temporary aggregation)
-		Common/                      # Cross-cutting helpers (logging abstractions, constants, result types)
-		Core/                        # Core business rules / domain services / domain logic
-		Models/                      # DTOs / records / value objects (avoid anemic classes; prefer immutable)
-		Infrastructure/              # External integrations (data access, file storage, messaging, etc.)
-		Features/                    # Vertical slices (if using feature folders) -> Command + Query + Handler
-		Abstractions/                # Interfaces that Infrastructure will implement
-		Configuration/               # Options classes and binding
-		Mappings/                    # Manual mapping helpers (extension methods / static classes) – keep isolated
-		Validation/                  # FluentValidation validators (if used)
+	FileHorizon.Host/                  # Entry point (ASP.NET Core or console); only startup, DI, config, logging, middleware
+	FileHorizon.Application/           # All functional code (temporary aggregation)
+		Common/                          # Cross-cutting helpers (logging abstractions, constants, result types)
+		Core/                            # Core business rules, domain services, pure domain logic (no framework dependencies)
+		Models/                          # DTOs, records, value objects (prefer immutable, avoid anemic classes)
+		Infrastructure/                  # External integrations (data access, file storage, messaging, etc.)
+		Abstractions/                    # Interfaces for external dependencies (implemented by Infrastructure)
+		Features/                        # Vertical slices (feature folders): Command + Query + Handler (+ Validator/Mapping)
+		Configuration/                   # Strongly typed options classes and config binding
+		Mappings/                        # Manual mapping helpers (extension methods / static classes), isolated per concern
+		Validation/                      # FluentValidation validators (if used), one per request/command
 test/
-	FileHorizon.Application.Tests/ # Unit tests (Core, Models, Services)
-	FileHorizon.Integration.Tests/ # Higher-level tests (optional early placeholder)
-```
+	FileHorizon.Application.Tests/     # Unit tests for Core, Models, Services (no external dependencies)
+	FileHorizon.Integration.Tests/     # Higher-level integration tests (optional early placeholder)
 
 Solution file root (later):
 
 ```
+
 FileHorizon.sln
+
 ```
 
 ---
@@ -112,8 +113,10 @@ When in doubt: High-level policies do not import low-level implementation detail
 Introduce (or plan) a `Result<T>`/`Result` pattern in `Common`:
 
 ```
+
 Result<T>.Success(value)
 Result<T>.Failure(Error code, message)
+
 ```
 
 Provide a central `Error` catalog (static class with nested domains or strongly typed discriminated style). Avoid scattering raw strings.
@@ -206,11 +209,13 @@ We follow the Conventional (Semantic) Commit format to enable automated tooling 
 Format:
 
 ```
+
 <type>(<optional-scope>)<!?>: <subject>
 
 [optional body]
 
 [optional footer(s)]
+
 ```
 
 Rules:
@@ -242,6 +247,7 @@ Breaking changes:
 Examples:
 
 ```
+
 feat(core): add Result<T> abstraction
 fix(infrastructure): handle transient timeout in file storage client
 docs(readme): clarify local dev setup steps
@@ -251,6 +257,7 @@ test(core): add tests for FileMetadata validation
 chore: bump dependencies and regenerate lock files
 perf(core): optimize large file streaming buffer size
 revert: revert feat(core): add Result<T> abstraction
+
 ```
 
 Body guidance (optional):
@@ -278,11 +285,13 @@ Optional Git hook (future): Add a `commit-msg` hook to validate pattern (documen
 As the codebase grows, we may split into multiple projects:
 
 ```
+
 FileHorizon.Domain
 FileHorizon.Application (CQRS / Orchestrations)
 FileHorizon.Infrastructure
 FileHorizon.Host
-```
+
+````
 
 Design current internal folders so they can be lifted into these projects with minimal churn (avoid leaking infra types into core logic, keep namespaces consistent).
 
@@ -320,7 +329,7 @@ var app = builder.Build();
 app.MapHealthChecks("/health");
 
 app.Run();
-```
+````
 
 And in `FileHorizon.Application` an extension:
 
