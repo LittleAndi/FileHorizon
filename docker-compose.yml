@@ -1,0 +1,74 @@
+version: "3.9"
+
+# Quick start:
+# 1. docker compose up -d --build
+# 2. Visit health endpoint: http://localhost:8080/health
+#
+# To override options use environment variables (examples below). Copy this file to a local override or use an .env file.
+
+services:
+  redis:
+    image: redis:latest
+    container_name: filehorizon-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: filehorizon-app
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ASPNETCORE_ENVIRONMENT: Development
+      # Enable Redis queue
+      Redis__Enabled: "true"
+      Redis__Host: redis
+      Redis__Port: 6379
+      Redis__StreamName: filehorizon:file-events
+      Redis__ConsumerGroup: filehorizon-workers
+      Redis__ConsumerNamePrefix: fh
+      # Feature flags
+      Features__UseSyntheticPoller: "true"
+      Features__EnableFileTransfer: "false"
+      # Polling behavior
+      Polling__IntervalMilliseconds: 1000
+      Polling__BatchReadLimit: 10
+      # Example file sources (adjust host paths as needed)
+      FileSources__Sources__0__Name: InboxA
+      FileSources__Sources__0__Path: /data/inboxA
+      FileSources__Sources__0__Pattern: "*.*"
+      FileSources__Sources__0__Recursive: "true"
+      FileSources__Sources__0__DestinationPath: /data/outboxA
+    ports:
+      - "8080:8080"
+    volumes:
+      - type: bind
+        source: ./_data/inboxA
+        target: /data/inboxA
+      - type: bind
+        source: ./_data/outboxA
+        target: /data/outboxA
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local

@@ -57,9 +57,103 @@ docker run --rm -p 8080:8080 \
 	filehorizon:dev
 ```
 
+### Using docker-compose (nerdctl compatible)
+
+A `docker-compose.yml` is provided to spin up Redis + the FileHorizon app quickly. The file is compatible with `nerdctl compose` in containerd environments (Rancher Desktop, Lima, etc.).
+
+Quick start (nerdctl):
+
+```
+# Create local data folders (Linux/macOS examples)
+mkdir -p _data/inboxA _data/outboxA
+
+# Or on PowerShell (Windows):
+New-Item -ItemType Directory -Path _data/inboxA,_data/outboxA | Out-Null
+
+# Build and start (foreground)
+nerdctl compose up --build
+
+# Or start detached
+nerdctl compose up -d --build
+
+# Check service status
+nerdctl compose ps
+
+# Tail logs
+nerdctl compose logs -f app
+```
+
+Health check:
+
+```
+curl http://localhost:8080/health
+```
+
+Stop & remove:
+
+```
+nerdctl compose down
+```
+
+#### Environment Variables in Compose
+
+The compose file sets sensible defaults:
+
+- `Redis__Enabled=true` enables Redis Streams queue (falls back to in-memory if false).
+- `FileSources__Sources__0__*` defines the first file source (InboxA). Add more sources incrementally:
+  - `FileSources__Sources__1__Name=InboxB`
+  - `FileSources__Sources__1__Path=/data/inboxB`
+- Change `Features__EnableFileTransfer` to `true` to perform actual file transfers once implemented.
+
+You can override any value using an `.env` file placed next to `docker-compose.yml`:
+
+```
+# .env example
+FEATURES__USESYNTHETICPOLLER=false
+REDIS__ENABLED=true
+POLLING__INTERVALMILLISECONDS=500
+```
+
+(Compose automatically loads `.env`; ensure variable names match exactly.)
+
+#### Common Adjustments
+
+- Faster polling during development:
+  - `Polling__IntervalMilliseconds=500`
+- Larger batch processing:
+  - `Polling__BatchReadLimit=25`
+- Switch to local fallback queue:
+  - `Redis__Enabled=false`
+- Separate stream per environment:
+  - `Redis__StreamName=filehorizon:dev:file-events`
+
+#### Scaling Out (Preview)
+
+To test horizontal scaling (Redis-backed queue required):
+
+```
+nerdctl compose up -d --build --scale app=2
+```
+
+Each replica will create a unique consumer name derived from `Redis__ConsumerNamePrefix` ensuring cooperative consumption via the shared consumer group.
+
 ### Future Hardening Ideas
 
 - Switch to distroless or `-alpine` base (after validating native dependencies). 
 - Add read-only root filesystem (`--read-only`) with tmpfs mounts for transient storage. 
 - Introduce health/liveness/readiness probes in orchestration environments.
+
+---
+
+## Roadmap (Excerpt)
+
+- Pending message claiming / retry logic for Redis Streams
+- Idempotency and deduplication store
+- Service Bus ingress/egress integration
+- OpenTelemetry metrics/traces instrumentation
+- SFTP/FTP protocol plugins
+
+---
+
+Contributions welcome—feel free to open issues or draft PRs as the architecture evolves.
 
