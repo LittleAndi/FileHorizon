@@ -35,8 +35,17 @@ jobs:
           cache: true
           cache-dependency-path: "**/packages.lock.json"
 
-      - name: Restore
+      - name: Restore (generate / update lock files)
         run: dotnet restore FileHorizon.sln
+
+      - name: Fail if lock files changed
+        run: |
+          git diff --name-only --exit-code || (
+            echo "Detected changes to lock files. Please commit updated packages.lock.json." && exit 1
+          )
+
+      - name: Locked restore validation
+        run: dotnet restore FileHorizon.sln --locked-mode
 
       - name: Build
         run: dotnet build FileHorizon.sln --configuration Release --no-restore /warnaserror
