@@ -159,20 +159,27 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
                 {
                     _logger.LogWarning("Skipping malformed stream entry {EntryId}", entry.Id);
                     // Acknowledge to avoid stuck entry even if malformed (optional; could also dead-letter)
-                    await AckAsync(entry.Id).ConfigureAwait(false);
+                    if (!entry.Id.IsNullOrEmpty)
+                    {
+                        await AckAsync(entry.Id).ConfigureAwait(false);
+                    }
                     continue;
                 }
                 yield return fileEvent;
-                await AckAsync(entry.Id).ConfigureAwait(false);
+                if (!entry.Id.IsNullOrEmpty)
+                {
+                    await AckAsync(entry.Id).ConfigureAwait(false);
+                }
             }
         }
     }
 
-    private async Task AckAsync(string entryId)
+    private async Task AckAsync(RedisValue entryId)
     {
         try
         {
-            await _db.StreamAcknowledgeAsync(_options.StreamName, _options.ConsumerGroup, entryId).ConfigureAwait(false);
+            if (entryId.IsNullOrEmpty) return;
+            await _db.StreamAcknowledgeAsync(_options.StreamName, _options.ConsumerGroup, entryId!).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -227,11 +234,17 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
                 if (fe != null)
                 {
                     list.Add(fe);
-                    _ = _db.StreamAcknowledgeAsync(_options.StreamName, _options.ConsumerGroup, e.Id); // fire and forget ack
+                    if (!e.Id.IsNullOrEmpty)
+                    {
+                        _ = _db.StreamAcknowledgeAsync(_options.StreamName, _options.ConsumerGroup, e.Id); // fire and forget ack
+                    }
                 }
                 else
                 {
-                    _ = _db.StreamAcknowledgeAsync(_options.StreamName, _options.ConsumerGroup, e.Id);
+                    if (!e.Id.IsNullOrEmpty)
+                    {
+                        _ = _db.StreamAcknowledgeAsync(_options.StreamName, _options.ConsumerGroup, e.Id);
+                    }
                 }
             }
             return list;
