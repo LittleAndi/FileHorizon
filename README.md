@@ -14,6 +14,8 @@ FileHorizon is built for teams that need the reliability of managed file transfe
 
 This repository includes a multi-stage `Dockerfile` for building a lean runtime image that runs as a non-root user.
 
+> WSL / containerd environments: If you're on **WSL2 using Rancher Desktop / Lima / containerd**, prefer `nerdctl` over the classic `docker` CLI. The examples below show both forms where it matters. Mixing `docker` (Moby) and `nerdctl` (containerd) against different runtimes in the same workspace can produce confusing state (images not found, networks missing, etc.). Pick one consistently—on WSL + containerd choose `nerdctl`.
+
 ### Build
 
 ```
@@ -60,6 +62,25 @@ docker run --rm -p 8080:8080 \
 ### Using docker-compose (nerdctl compatible)
 
 A `docker-compose.yml` is provided to spin up Redis + the FileHorizon app quickly. The file is compatible with `nerdctl compose` in containerd environments (Rancher Desktop, Lima, etc.).
+
+#### If you are on WSL + Rancher Desktop (containerd)
+
+Use `nerdctl compose` (NOT `docker compose`). Example mapping:
+
+| Purpose                 | Docker CLI                           | nerdctl                               |
+| ----------------------- | ------------------------------------ | ------------------------------------- |
+| Build & up (foreground) | `docker compose up --build`          | `nerdctl compose up --build`          |
+| Detached                | `docker compose up -d --build`       | `nerdctl compose up -d --build`       |
+| Scale                   | `docker compose up -d --scale app=2` | `nerdctl compose up -d --scale app=2` |
+| Logs                    | `docker compose logs -f app`         | `nerdctl compose logs -f app`         |
+| Stop                    | `docker compose down`                | `nerdctl compose down`                |
+
+Why: Rancher Desktop (containerd backend) manages images separately from Docker Desktop (Moby). If you run `docker build` then `nerdctl compose up`, the image may not exist in containerd and the deployment will fail. Always build with the same tool:
+
+```
+nerdctl build -t filehorizon:dev .
+nerdctl compose up -d --build
+```
 
 Quick start (nerdctl):
 
@@ -137,10 +158,12 @@ nerdctl compose up -d --build --scale app=2
 
 Each replica will create a unique consumer name derived from `Redis__ConsumerNamePrefix` ensuring cooperative consumption via the shared consumer group.
 
+> Reminder (WSL + containerd): If you previously built with `docker build`, rebuild with `nerdctl build` to ensure the image exists in the containerd image store before scaling.
+
 ### Future Hardening Ideas
 
-- Switch to distroless or `-alpine` base (after validating native dependencies). 
-- Add read-only root filesystem (`--read-only`) with tmpfs mounts for transient storage. 
+- Switch to distroless or `-alpine` base (after validating native dependencies).
+- Add read-only root filesystem (`--read-only`) with tmpfs mounts for transient storage.
 - Introduce health/liveness/readiness probes in orchestration environments.
 
 ---
@@ -156,4 +179,3 @@ Each replica will create a unique consumer name derived from `Redis__ConsumerNam
 ---
 
 Contributions welcome—feel free to open issues or draft PRs as the architecture evolves.
-
