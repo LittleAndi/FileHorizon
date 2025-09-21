@@ -13,6 +13,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddApplicationServices(this IServiceCollection services)
     {
         // Core services
+        services.AddSingleton<Abstractions.IFileProcessingTelemetry, Infrastructure.Telemetry.FileProcessingTelemetry>();
         services.AddSingleton<Core.IFileProcessingService, Core.FileProcessingService>();
         // Infrastructure defaults
         services.AddSingleton<Abstractions.IFileProcessor, Infrastructure.FileProcessing.LocalFileTransferProcessor>();

@@ -8,6 +8,12 @@ namespace FileHorizon.Application.Tests;
 
 public class FileProcessingServiceTests
 {
+    private sealed class FakeTelemetry : IFileProcessingTelemetry
+    {
+        public int Success; public int Failure; public List<double> Durations = new();
+        public void RecordSuccess(string protocol, double elapsedMs) { Success++; Durations.Add(elapsedMs); }
+        public void RecordFailure(string protocol, double elapsedMs) { Failure++; Durations.Add(elapsedMs); }
+    }
     private sealed class TestFileProcessor : IFileProcessor
     {
         private readonly Func<FileEvent, CancellationToken, Task<Result>> _impl;
@@ -35,11 +41,13 @@ public class FileProcessingServiceTests
 
         var expected = Result.Success();
         var testProcessor = new TestFileProcessor((fe, ct) => Task.FromResult(expected));
-        var svc = new FileProcessingService(testProcessor, NullLogger<FileProcessingService>.Instance);
+        var telemetry = new FakeTelemetry();
+        var svc = new FileProcessingService(testProcessor, NullLogger<FileProcessingService>.Instance, telemetry);
 
         var result = await svc.HandleAsync(fileEvent, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(1, testProcessor.CallCount);
+        Assert.Equal(1, telemetry.Success);
     }
 }

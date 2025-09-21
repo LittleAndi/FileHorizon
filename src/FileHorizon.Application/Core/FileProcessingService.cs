@@ -16,11 +16,13 @@ public sealed class FileProcessingService : IFileProcessingService
 {
     private readonly IFileProcessor _fileProcessor;
     private readonly ILogger<FileProcessingService> _logger;
+    private readonly IFileProcessingTelemetry _telemetry;
 
-    public FileProcessingService(IFileProcessor fileProcessor, ILogger<FileProcessingService> logger)
+    public FileProcessingService(IFileProcessor fileProcessor, ILogger<FileProcessingService> logger, IFileProcessingTelemetry telemetry)
     {
         _fileProcessor = fileProcessor;
         _logger = logger;
+        _telemetry = telemetry;
     }
 
     public async Task<Result> HandleAsync(FileEvent fileEvent, CancellationToken ct)
@@ -36,17 +38,16 @@ public sealed class FileProcessingService : IFileProcessingService
 
         var result = await _fileProcessor.ProcessAsync(fileEvent, ct).ConfigureAwait(false);
         var elapsedMs = (Stopwatch.GetTimestamp() - start) * 1000d / Stopwatch.Frequency;
-        TelemetryInstrumentation.ProcessingDurationMs.Record(elapsedMs, KeyValuePair.Create<string, object?>("file.protocol", fileEvent.Protocol));
 
         if (!result.IsSuccess)
         {
-            TelemetryInstrumentation.FilesFailed.Add(1, KeyValuePair.Create<string, object?>("file.protocol", fileEvent.Protocol));
+            _telemetry.RecordFailure(fileEvent.Protocol, elapsedMs);
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.ToString());
             _logger.LogWarning("File event {FileId} failed: {Error}", fileEvent.Id, result.Error);
         }
         else
         {
-            TelemetryInstrumentation.FilesProcessed.Add(1, KeyValuePair.Create<string, object?>("file.protocol", fileEvent.Protocol));
+            _telemetry.RecordSuccess(fileEvent.Protocol, elapsedMs);
             activity?.SetStatus(ActivityStatusCode.Ok);
             _logger.LogDebug("File event {FileId} processed successfully", fileEvent.Id);
         }
