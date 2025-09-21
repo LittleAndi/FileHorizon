@@ -20,45 +20,27 @@ public sealed class FileProcessingBackgroundService(
     private readonly IOptionsMonitor<PollingOptions> _pollingOptions = pollingOptions; // re-use BatchReadLimit & interval for now
     private readonly ILogger<FileProcessingBackgroundService> _logger = logger;
 
+    private const int MinDelayMs = 25;
+    private const int MaxDelayMs = 500;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("File processing service starting");
-
-        // Adaptive delay parameters
-        const int minDelayMs = 25;
-        const int maxDelayMs = 500;
-        var currentDelay = minDelayMs;
+        var delay = new AdaptiveDelay(MinDelayMs, MaxDelayMs);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var options = _pollingOptions.CurrentValue; // using BatchReadLimit
-                var events = _queue.TryDrain(options.BatchReadLimit);
-                if (events.Count == 0)
+                var batch = DrainQueue();
+                if (batch.Count == 0)
                 {
-                    // Exponential-ish backoff when idle
-                    currentDelay = Math.Min(currentDelay * 2, maxDelayMs);
-                    await Task.Delay(currentDelay, stoppingToken).ConfigureAwait(false);
+                    await delay.DelayAsync(stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
-                // Reset delay once we have work
-                currentDelay = minDelayMs;
-
-                if (events.Count > 0)
-                {
-                    _logger.LogDebug("Processing {Count} file events", events.Count);
-                }
-
-                foreach (var fe in events)
-                {
-                    var result = await _processingService.HandleAsync(fe, stoppingToken).ConfigureAwait(false);
-                    if (!result.IsSuccess)
-                    {
-                        _logger.LogWarning("Processing failure for {FileId}: {Error}", fe.Id, result.Error);
-                    }
-                }
+                delay.Reset();
+                await ProcessBatchAsync(batch, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -66,11 +48,63 @@ public sealed class FileProcessingBackgroundService(
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unhandled exception in processing loop");
-                await Task.Delay(250, stoppingToken).ConfigureAwait(false);
+                await HandleLoopExceptionAsync(ex, stoppingToken).ConfigureAwait(false);
             }
         }
 
         _logger.LogInformation("File processing service stopping");
+    }
+
+    private IReadOnlyCollection<Models.FileEvent> DrainQueue()
+    {
+        var options = _pollingOptions.CurrentValue;
+        return _queue.TryDrain(options.BatchReadLimit);
+    }
+
+    private async Task ProcessBatchAsync(IReadOnlyCollection<Models.FileEvent> events, CancellationToken ct)
+    {
+        if (events.Count > 0)
+        {
+            _logger.LogDebug("Processing {Count} file events", events.Count);
+        }
+
+        foreach (var fe in events)
+        {
+            if (ct.IsCancellationRequested) break; // graceful early exit
+
+            var result = await _processingService.HandleAsync(fe, ct).ConfigureAwait(false);
+            if (!result.IsSuccess)
+            {
+                _logger.LogWarning("Processing failure for {FileId}: {Error}", fe.Id, result.Error);
+            }
+        }
+    }
+
+    private async Task HandleLoopExceptionAsync(Exception ex, CancellationToken ct)
+    {
+        _logger.LogError(ex, "Unhandled exception in processing loop");
+        await Task.Delay(250, ct).ConfigureAwait(false);
+    }
+
+    private sealed class AdaptiveDelay
+    {
+        private readonly int _min;
+        private readonly int _max;
+        private int _current;
+
+        public AdaptiveDelay(int min, int max)
+        {
+            _min = min;
+            _max = max;
+            _current = min;
+        }
+
+        public async Task DelayAsync(CancellationToken ct)
+        {
+            _current = Math.Min(_current * 2, _max);
+            await Task.Delay(_current, ct).ConfigureAwait(false);
+        }
+
+        public void Reset() => _current = _min;
     }
 }
