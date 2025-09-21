@@ -34,8 +34,8 @@ public sealed class LocalDirectoryPoller : IFilePoller
 
     public async Task<Result> PollAsync(CancellationToken ct)
     {
-        var sources = _sourcesOptions.CurrentValue?.Sources ?? new();
-        if (sources.Count == 0)
+        var sources = _sourcesOptions.CurrentValue?.Sources;
+        if (sources is null || sources.Count == 0)
         {
             _logger.LogDebug("No file sources configured - skipping local directory poll.");
             return Result.Success();
@@ -44,93 +44,104 @@ public sealed class LocalDirectoryPoller : IFilePoller
         foreach (var source in sources)
         {
             if (ct.IsCancellationRequested) break;
-            // Normalize key for disabled tracking
-            var sourceKey = source.Path ?? string.Empty;
-            if (_disabledSources.ContainsKey(sourceKey))
-            {
-                _logger.LogTrace("Skipping previously disabled source {SourceName} ({Path})", source.Name, source.Path);
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(source.Path) || !Directory.Exists(source.Path))
-            {
-                _logger.LogWarning("Disabling source {SourceName} - path invalid or does not exist: {Path}", source.Name, source.Path);
-                _disabledSources[sourceKey] = 1;
-                continue;
-            }
-
-            try
-            {
-                var searchOption = source.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-                // For now support only single pattern (could extend to split on ';')
-                var pattern = string.IsNullOrWhiteSpace(source.Pattern) ? "*.*" : source.Pattern;
-                var files = Directory.EnumerateFiles(source.Path, pattern, searchOption);
-                foreach (var file in files)
-                {
-                    if (ct.IsCancellationRequested) break;
-                    FileInfo fi;
-                    try
-                    {
-                        fi = new FileInfo(file);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogDebug(ex, "Failed to stat file {File}", file);
-                        continue;
-                    }
-
-                    // Stability check: ensure last write time hasn't changed within MinStableSeconds window
-                    var lastWrite = fi.LastWriteTimeUtc;
-                    var size = fi.Length;
-                    var stabilityWindow = TimeSpan.FromSeconds(Math.Max(0, source.MinStableSeconds));
-                    if (DateTime.UtcNow - lastWrite < stabilityWindow)
-                    {
-                        _logger.LogTrace("Skipping unstable file {File} (mtime {MTimeUtc})", fi.FullName, lastWrite);
-                        continue;
-                    }
-
-                    var key = fi.FullName;
-                    var discovered = new DateTimeOffset(lastWrite, TimeSpan.Zero);
-                    // Use last write time as a simple version; if we've seen a newer or same version skip
-                    if (_seenFiles.TryGetValue(key, out var prev) && prev >= discovered)
-                    {
-                        continue; // already processed this version
-                    }
-
-                    // Update snapshot early to avoid duplicates in same poll cycle
-                    _seenFiles[key] = discovered;
-
-                    var id = Guid.NewGuid().ToString("N");
-                    var metadata = new FileMetadata(
-                        SourcePath: fi.FullName,
-                        SizeBytes: size,
-                        LastModifiedUtc: lastWrite,
-                        HashAlgorithm: "none",
-                        Checksum: null);
-                    var ev = new FileEvent(
-                        Id: id,
-                        Metadata: metadata,
-                        DiscoveredAtUtc: DateTimeOffset.UtcNow,
-                        Protocol: "local",
-                        DestinationPath: fi.FullName // placeholder until mapping to destination root
-                    );
-                    var enqueueResult = await _queue.EnqueueAsync(ev, ct).ConfigureAwait(false);
-                    if (!enqueueResult.IsSuccess)
-                    {
-                        _logger.LogWarning("Failed to enqueue local file {File}: {Error}", fi.FullName, enqueueResult.Error);
-                    }
-                    else
-                    {
-                        _logger.LogDebug("Enqueued local file event {FileId} from {File}", id, fi.FullName);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error polling source {SourceName} at path {Path}", source.Name, source.Path);
-            }
+            await ProcessSourceAsync(source, ct).ConfigureAwait(false);
         }
 
         return Result.Success();
+    }
+
+    private async Task ProcessSourceAsync(FileSourceOptions source, CancellationToken ct)
+    {
+        var sourceKey = source.Path ?? string.Empty;
+
+        if (_disabledSources.ContainsKey(sourceKey))
+        {
+            _logger.LogTrace("Skipping previously disabled source {SourceName} ({Path})", source.Name, source.Path);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(source.Path) || !Directory.Exists(source.Path))
+        {
+            _logger.LogWarning("Disabling source {SourceName} - path invalid or does not exist: {Path}", source.Name, source.Path);
+            _disabledSources[sourceKey] = 1;
+            return;
+        }
+
+        try
+        {
+            await EnumerateAndProcessFilesAsync(source, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error polling source {SourceName} at path {Path}", source.Name, source.Path);
+        }
+    }
+
+    private async Task EnumerateAndProcessFilesAsync(FileSourceOptions source, CancellationToken token)
+    {
+        var searchOption = source.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+        var pattern = string.IsNullOrWhiteSpace(source.Pattern) ? "*.*" : source.Pattern;
+
+        foreach (var file in Directory.EnumerateFiles(source.Path!, pattern, searchOption))
+        {
+            if (token.IsCancellationRequested) break;
+            await ProcessFileAsync(file, source, token).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ProcessFileAsync(string file, FileSourceOptions source, CancellationToken token)
+    {
+        FileInfo fi;
+        try
+        {
+            fi = new FileInfo(file);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to stat file {File}", file);
+            return;
+        }
+
+        var lastWrite = fi.LastWriteTimeUtc;
+        var stabilityWindow = TimeSpan.FromSeconds(Math.Max(0, source.MinStableSeconds));
+        if (DateTime.UtcNow - lastWrite < stabilityWindow)
+        {
+            _logger.LogTrace("Skipping unstable file {File} (mtime {MTimeUtc})", fi.FullName, lastWrite);
+            return;
+        }
+
+        var key = fi.FullName;
+        var discovered = new DateTimeOffset(lastWrite, TimeSpan.Zero);
+        if (_seenFiles.TryGetValue(key, out var prev) && prev >= discovered)
+        {
+            return; // already processed this version
+        }
+
+        _seenFiles[key] = discovered; // snapshot early
+
+        var metadata = new FileMetadata(
+            SourcePath: fi.FullName,
+            SizeBytes: fi.Length,
+            LastModifiedUtc: lastWrite,
+            HashAlgorithm: "none",
+            Checksum: null);
+
+        var ev = new FileEvent(
+            Id: Guid.NewGuid().ToString("N"),
+            Metadata: metadata,
+            DiscoveredAtUtc: DateTimeOffset.UtcNow,
+            Protocol: "local",
+            DestinationPath: fi.FullName
+        );
+
+        var enqueueResult = await _queue.EnqueueAsync(ev, token).ConfigureAwait(false);
+        if (!enqueueResult.IsSuccess)
+        {
+            _logger.LogWarning("Failed to enqueue local file {File}: {Error}", fi.FullName, enqueueResult.Error);
+        }
+        else
+        {
+            _logger.LogDebug("Enqueued local file event {FileId} from {File}", ev.Id, fi.FullName);
+        }
     }
 }
