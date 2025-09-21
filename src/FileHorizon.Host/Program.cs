@@ -47,6 +47,18 @@ if (telemetryOptions.EnableLogging)
     });
 }
 
+if (builder.Environment.IsDevelopment() ||
+    string.Equals(Environment.GetEnvironmentVariable("LOG_CONSOLE_DEV"), "true", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Logging.AddSimpleConsole(o =>
+    {
+        o.SingleLine = true;
+        o.TimestampFormat = "HH:mm:ss.fff ";
+        o.UseUtcTimestamp = false;
+        o.IncludeScopes = false;
+    });
+}
+
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(rb => rb.AddService(telemetryOptions.ServiceName ?? "FileHorizon"))
     .WithMetrics(metrics =>
