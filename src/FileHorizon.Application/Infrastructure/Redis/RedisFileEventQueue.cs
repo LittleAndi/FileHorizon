@@ -119,34 +119,15 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            StreamEntry[] entries;
-            try
+            var entries = await TryReadBatchAsync(ct).ConfigureAwait(false);
+            if (entries is null)
             {
-                // XREADGROUP GROUP <group> <consumer> BLOCK <ms> COUNT <n> STREAMS <key> >
-                entries = await _db.StreamReadGroupAsync(
-                    _options.StreamName,
-                    _options.ConsumerGroup,
-                    _consumerName,
-                    ">",
-                    count: _options.ReadBatchSize,
-                    flags: CommandFlags.None).ConfigureAwait(false);
-            }
-            catch (RedisServerException ex) when (ex.Message.Contains("NOGROUP"))
-            {
-                _logger.LogWarning("Consumer group missing; attempting to recreate");
-                await EnsureStreamAndGroupAsync().ConfigureAwait(false);
-                continue;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error reading from stream {Stream}", _options.StreamName);
-                await Task.Delay(500, ct).ConfigureAwait(false);
+                // transient error already logged + backoff applied inside TryReadBatchAsync
                 continue;
             }
 
             if (entries.Length == 0)
             {
-                // Implement a blocking delay manually; StreamReadGroupAsync without BLOCK is instantaneous.
                 await Task.Delay(_options.ReadBlockMilliseconds, ct).ConfigureAwait(false);
                 continue;
             }
@@ -154,24 +135,59 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
             foreach (var entry in entries)
             {
                 if (ct.IsCancellationRequested) yield break;
-                var fileEvent = MapEntryToFileEvent(entry);
-                if (fileEvent is null)
+                var fe = await ProcessEntryAsync(entry).ConfigureAwait(false);
+                if (fe != null)
                 {
-                    _logger.LogWarning("Skipping malformed stream entry {EntryId}", entry.Id);
-                    // Acknowledge to avoid stuck entry even if malformed (optional; could also dead-letter)
-                    if (!entry.Id.IsNullOrEmpty)
-                    {
-                        await AckAsync(entry.Id).ConfigureAwait(false);
-                    }
-                    continue;
-                }
-                yield return fileEvent;
-                if (!entry.Id.IsNullOrEmpty)
-                {
-                    await AckAsync(entry.Id).ConfigureAwait(false);
+                    yield return fe;
                 }
             }
         }
+    }
+
+    private async Task<StreamEntry[]?> TryReadBatchAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _db.StreamReadGroupAsync(
+                _options.StreamName,
+                _options.ConsumerGroup,
+                _consumerName,
+                ">",
+                count: _options.ReadBatchSize,
+                flags: CommandFlags.None).ConfigureAwait(false);
+        }
+        catch (RedisServerException ex) when (ex.Message.Contains("NOGROUP"))
+        {
+            _logger.LogWarning("Consumer group missing; attempting to recreate");
+            await EnsureStreamAndGroupAsync().ConfigureAwait(false);
+            return Array.Empty<StreamEntry>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error reading from stream {Stream}", _options.StreamName);
+            await Task.Delay(500, ct).ConfigureAwait(false);
+            return null; // signal transient failure
+        }
+    }
+
+    private async Task<FileEvent?> ProcessEntryAsync(StreamEntry entry)
+    {
+        var fileEvent = MapEntryToFileEvent(entry);
+        if (fileEvent is null)
+        {
+            _logger.LogWarning("Skipping malformed stream entry {EntryId}", entry.Id);
+            if (!entry.Id.IsNullOrEmpty)
+            {
+                await AckAsync(entry.Id).ConfigureAwait(false);
+            }
+            return null;
+        }
+
+        if (!entry.Id.IsNullOrEmpty)
+        {
+            await AckAsync(entry.Id).ConfigureAwait(false);
+        }
+        return fileEvent;
     }
 
     private async Task AckAsync(RedisValue entryId)
