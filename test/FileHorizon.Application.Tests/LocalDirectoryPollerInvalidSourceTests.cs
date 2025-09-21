@@ -1,23 +1,13 @@
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Infrastructure.Polling;
 using FileHorizon.Application.Infrastructure.Queue;
-using FileHorizon.Application.Abstractions;
+using FileHorizon.Application.Tests.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
-using Xunit;
 
 namespace FileHorizon.Application.Tests;
 
 public class LocalDirectoryPollerInvalidSourceTests
 {
-    private sealed class OptionsMonitorStub<T> : IOptionsMonitor<T>
-    {
-        public OptionsMonitorStub(T value) => CurrentValue = value;
-        public T CurrentValue { get; set; }
-        public T Get(string? name) => CurrentValue;
-        public IDisposable OnChange(Action<T, string?> listener) => new Noop();
-        private sealed class Noop : IDisposable { public void Dispose() { } }
-    }
 
     [Fact]
     public async Task InvalidSource_DisabledAndSkippedSubsequentPolls()
@@ -50,13 +40,13 @@ public class LocalDirectoryPollerInvalidSourceTests
         Assert.Empty(drained);
 
         // Trigger config change to re-enable: update monitor CurrentValue
-        monitor.CurrentValue = new FileSourcesOptions
+        monitor.Set(new FileSourcesOptions
         {
             Sources = new List<FileSourceOptions>
             {
                 new() { Name = "missing", Path = missingPath, Pattern = "*.*", MinStableSeconds = 0 }
             }
-        };
+        });
         // Instantiate a fresh queue and poller to simulate clean reconfiguration (clears disabled set via ctor OnChange subscription not used in stub)
         queue = new InMemoryFileEventQueue(new NullLogger<InMemoryFileEventQueue>(), validator);
         poller = new LocalDirectoryPoller(queue, new NullLogger<LocalDirectoryPoller>(), monitor);

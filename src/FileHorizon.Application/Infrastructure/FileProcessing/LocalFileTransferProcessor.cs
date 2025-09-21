@@ -29,7 +29,8 @@ public sealed class LocalFileTransferProcessor : IFileProcessor
 
     public Task<Result> ProcessAsync(FileEvent fileEvent, CancellationToken ct)
     {
-        if (!_featureOptions.CurrentValue.EnableFileTransfer)
+        var features = _featureOptions.CurrentValue;
+        if (features is not null && !features.EnableFileTransfer)
         {
             _logger.LogDebug("File transfer disabled - skipping real copy/move for {File}", fileEvent.Metadata.SourcePath);
             return Task.FromResult(Result.Success());

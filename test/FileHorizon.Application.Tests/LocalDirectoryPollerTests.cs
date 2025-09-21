@@ -1,25 +1,16 @@
-using System.Threading.Channels;
 using FileHorizon.Application.Abstractions;
+using FileHorizon.Application.Common;
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Infrastructure.Polling;
 using FileHorizon.Application.Models;
-using FileHorizon.Application.Common;
+using FileHorizon.Application.Tests.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
-using Xunit;
+using System.Threading.Channels;
 
 namespace FileHorizon.Application.Tests;
 
 public class LocalDirectoryPollerTests
 {
-    private sealed class OptionsMonitorStub<T> : IOptionsMonitor<T>
-    {
-        public OptionsMonitorStub(T value) => CurrentValue = value;
-        public T CurrentValue { get; set; }
-        public T Get(string? name) => CurrentValue;
-        public IDisposable OnChange(Action<T, string?> listener) => new Noop();
-        private sealed class Noop : IDisposable { public void Dispose() { } }
-    }
 
     private sealed class TestQueue : IFileEventQueue
     {

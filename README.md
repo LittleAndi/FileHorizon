@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/LittleAndi/FileHorizon/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LittleAndi/FileHorizon/actions/workflows/ci.yml)
 
+> Disclaimer: A significant portion of this project's code is intentionally authored with AI assistance (pair‑programming style) via pull requests that still pass through normal version control, code review, and CI quality gates. All generated contributions are curated, adjusted, and ultimately owned by the repository maintainer. If you spot something that can be improved, please open an issue or PR.
+
 **FileHorizon** is an open-source, container-ready file transfer and orchestration system. Designed as a modern alternative to heavyweight integration platforms, it provides a lightweight yet reliable way to move files across **UNC paths, FTP, and SFTP** while ensuring observability and control. By leveraging **Redis** for distributed coordination, FileHorizon can scale out to multiple parallel containers without duplicate processing, making it suitable for both on-premises and hybrid cloud deployments.
 
 Configuration is centralized through **Azure App Configuration** and **Azure Key Vault**, enabling secure, dynamic management of connections and destinations. With **OpenTelemetry** at its core, FileHorizon delivers unified **logging, metrics, and tracing** out of the box—no separate logging stack required. The system emphasizes **safety and consistency**, ensuring files are only picked up once they are fully written at the source.
@@ -11,6 +13,8 @@ FileHorizon is built for teams that need the reliability of managed file transfe
 ## Container Image
 
 This repository includes a multi-stage `Dockerfile` for building a lean runtime image that runs as a non-root user.
+
+> WSL / containerd environments: If you're on **WSL2 using Rancher Desktop / Lima / containerd**, prefer `nerdctl` over the classic `docker` CLI. The examples below show both forms where it matters. Mixing `docker` (Moby) and `nerdctl` (containerd) against different runtimes in the same workspace can produce confusing state (images not found, networks missing, etc.). Pick one consistently—on WSL + containerd choose `nerdctl`.
 
 ### Build
 
@@ -50,14 +54,196 @@ Runtime configuration is provided via `appsettings.json` / environment variables
 
 ```
 docker run --rm -p 8080:8080 \
-	-e "Features__UseSyntheticPoller=false" \
+	-e "Pipeline__Role=All" \
 	-e "Features__EnableFileTransfer=true" \
 	filehorizon:dev
 ```
 
+### Using docker-compose (nerdctl compatible)
+
+A `docker-compose.yml` is provided to spin up Redis + the FileHorizon app quickly. The file is compatible with `nerdctl compose` in containerd environments (Rancher Desktop, Lima, etc.).
+
+#### If you are on WSL + Rancher Desktop (containerd)
+
+Use `nerdctl compose` (NOT `docker compose`). Example mapping:
+
+| Purpose                 | Docker CLI                           | nerdctl                               |
+| ----------------------- | ------------------------------------ | ------------------------------------- |
+| Build & up (foreground) | `docker compose up --build`          | `nerdctl compose up --build`          |
+| Detached                | `docker compose up -d --build`       | `nerdctl compose up -d --build`       |
+| Scale                   | `docker compose up -d --scale app=2` | `nerdctl compose up -d --scale app=2` |
+| Logs                    | `docker compose logs -f app`         | `nerdctl compose logs -f app`         |
+| Stop                    | `docker compose down`                | `nerdctl compose down`                |
+
+Why: Rancher Desktop (containerd backend) manages images separately from Docker Desktop (Moby). If you run `docker build` then `nerdctl compose up`, the image may not exist in containerd and the deployment will fail. Always build with the same tool:
+
+```
+nerdctl build -t filehorizon:dev .
+nerdctl compose up -d --build
+```
+
+Quick start (nerdctl):
+
+```
+# Create local data folders (Linux/macOS examples)
+mkdir -p _data/inboxA _data/outboxA
+
+# Or on PowerShell (Windows):
+New-Item -ItemType Directory -Path _data/inboxA,_data/outboxA | Out-Null
+
+# Build and start (foreground)
+nerdctl compose up --build
+
+# Or start detached
+nerdctl compose up -d --build
+
+# Check service status
+nerdctl compose ps
+
+# Tail logs
+nerdctl compose logs -f app
+```
+
+Health check:
+
+```
+curl http://localhost:8080/health
+```
+
+Stop & remove:
+
+```
+nerdctl compose down
+```
+
+#### Environment Variables in Compose
+
+The compose file sets sensible defaults:
+
+- `Redis__Enabled=true` enables Redis Streams queue (falls back to in-memory if false).
+- `FileSources__Sources__0__*` defines the first file source (InboxA). Add more sources incrementally:
+  - `FileSources__Sources__1__Name=InboxB`
+  - `FileSources__Sources__1__Path=/data/inboxB`
+- Change `Features__EnableFileTransfer` to `true` to perform actual file transfers once implemented.
+  Pipeline orchestration now uses `Pipeline__Role` to determine which background services run (see section below). `Features__EnableFileTransfer` only controls whether real file movement occurs.
+
+You can override any value using an `.env` file placed next to `docker-compose.yml`:
+
+```
+# .env example
+PIPELINE__ROLE=All
+FEATURES__ENABLEFILETRANSFER=false
+REDIS__ENABLED=true
+POLLING__INTERVALMILLISECONDS=500
+```
+
+(Compose automatically loads `.env`; ensure variable names match exactly.)
+
+#### Common Adjustments
+
+- Faster polling during development:
+  - `Polling__IntervalMilliseconds=500`
+- Larger batch processing:
+  - `Polling__BatchReadLimit=25`
+- Switch to local fallback queue:
+  - `Redis__Enabled=false`
+- Separate stream per environment:
+  - `Redis__StreamName=filehorizon:dev:file-events`
+
+#### Scaling Out (Preview)
+
+To test horizontal scaling (Redis-backed queue required):
+
+```
+nerdctl compose up -d --build --scale app=2
+```
+
+Each replica will create a unique consumer name derived from `Redis__ConsumerNamePrefix` ensuring cooperative consumption via the shared consumer group.
+For a clean separation:
+
+Example: one poller + multiple workers
+
+```
+# poller (enqueue only, no processing)
+Pipeline__Role=Poller
+Features__EnableFileTransfer=false
+
+# worker (process only)
+Pipeline__Role=Worker
+Features__EnableFileTransfer=true
+```
+
+Alternatively (common simpler pattern):
+
+```
+# single poller that also processes
+Pipeline__Role=All
+Features__EnableFileTransfer=true
+
+# additional workers (no polling - processing only)
+Pipeline__Role=Worker
+Features__EnableFileTransfer=true
+```
+
+> Reminder (WSL + containerd): If you previously built with `docker build`, rebuild with `nerdctl build` to ensure the image exists in the containerd image store before scaling.
+
+#### Generating files
+
+Use these commands (or similar) to generate lots of files quickly in the inboxes.
+
+```
+seq 1 1000 | xargs -I{} -P 8 sh -c 'echo "test" > inboxA/file{}.txt'
+seq 1 1000 | xargs -I{} -P 8 sh -c 'echo "test" > inboxB/file{}.txt'
+```
+
+To count files i a folder you can use
+
+```
+find . -maxdepth 1 -type f | wc -l
+```
+
 ### Future Hardening Ideas
 
-- Switch to distroless or `-alpine` base (after validating native dependencies). 
-- Add read-only root filesystem (`--read-only`) with tmpfs mounts for transient storage. 
+- Switch to distroless or `-alpine` base (after validating native dependencies).
+- Add read-only root filesystem (`--read-only`) with tmpfs mounts for transient storage.
 - Introduce health/liveness/readiness probes in orchestration environments.
 
+---
+
+## Roadmap (Excerpt)
+
+- Pending message claiming / retry logic for Redis Streams
+- Idempotency and deduplication store
+- Service Bus ingress/egress integration
+- OpenTelemetry metrics/traces instrumentation
+- SFTP/FTP protocol plugins
+
+---
+
+Contributions welcome—feel free to open issues or draft PRs as the architecture evolves.
+
+---
+
+## Pipeline Roles (New Split Architecture)
+
+The runtime now supports explicit role selection separating file discovery (polling) from event processing.
+
+Roles are configured via `Pipeline:Role` (or environment variable `Pipeline__Role`).
+
+Available values:
+
+| Role   | Hosted Services Started | Typical Use Case                      |
+| ------ | ----------------------- | ------------------------------------- |
+| All    | Polling + Processing    | Local dev / simple single-node deploy |
+| Poller | Polling only            | Dedicated ingestion node              |
+| Worker | Processing only         | Horizontal scale-out workers          |
+
+Example environment overrides:
+
+```
+Pipeline__Role=Poller
+
+Pipeline__Role=Worker
+```
+
+`Pipeline__Role` fully determines polling vs processing. The only remaining feature flag in this area is `Features__EnableFileTransfer` which toggles actual file copy/move side effects.
