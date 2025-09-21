@@ -54,8 +54,7 @@ Runtime configuration is provided via `appsettings.json` / environment variables
 
 ```
 docker run --rm -p 8080:8080 \
-	-e "Features__EnablePolling=true" \
-	-e "Features__EnableProcessing=true" \
+	-e "Pipeline__Role=All" \
 	-e "Features__EnableFileTransfer=true" \
 	filehorizon:dev
 ```
@@ -126,15 +125,13 @@ The compose file sets sensible defaults:
   - `FileSources__Sources__1__Name=InboxB`
   - `FileSources__Sources__1__Path=/data/inboxB`
 - Change `Features__EnableFileTransfer` to `true` to perform actual file transfers once implemented.
-- `Features__EnablePolling` master switch for any polling (synthetic or directory). Set `false` on pure worker replicas.
-- `Features__EnableProcessing` master switch for processing/dequeuing work; set `false` if you want a poller-only instance that just enqueues (rare) or for diagnostic dry runs.
+  Pipeline orchestration now uses `Pipeline__Role` to determine which background services run (see section below). `Features__EnableFileTransfer` only controls whether real file movement occurs.
 
 You can override any value using an `.env` file placed next to `docker-compose.yml`:
 
 ```
 # .env example
-FEATURES__ENABLEPOLLING=true
-FEATURES__ENABLEPROCESSING=true
+PIPELINE__ROLE=All
 FEATURES__ENABLEFILETRANSFER=false
 REDIS__ENABLED=true
 POLLING__INTERVALMILLISECONDS=500
@@ -168,13 +165,11 @@ Example: one poller + multiple workers
 
 ```
 # poller (enqueue only, no processing)
-Features__EnablePolling=true
-Features__EnableProcessing=false
+Pipeline__Role=Poller
 Features__EnableFileTransfer=false
 
 # worker (process only)
-Features__EnablePolling=false
-Features__EnableProcessing=true
+Pipeline__Role=Worker
 Features__EnableFileTransfer=true
 ```
 
@@ -182,13 +177,11 @@ Alternatively (common simpler pattern):
 
 ```
 # single poller that also processes
-Features__EnablePolling=true
-Features__EnableProcessing=true
+Pipeline__Role=All
 Features__EnableFileTransfer=true
 
-# additional workers (no polling)
-Features__EnablePolling=false
-Features__EnableProcessing=true
+# additional workers (no polling - processing only)
+Pipeline__Role=Worker
 Features__EnableFileTransfer=true
 ```
 
@@ -228,3 +221,29 @@ find . -maxdepth 1 -type f | wc -l
 ---
 
 Contributions welcome—feel free to open issues or draft PRs as the architecture evolves.
+
+---
+
+## Pipeline Roles (New Split Architecture)
+
+The runtime now supports explicit role selection separating file discovery (polling) from event processing.
+
+Roles are configured via `Pipeline:Role` (or environment variable `Pipeline__Role`).
+
+Available values:
+
+| Role   | Hosted Services Started | Typical Use Case                      |
+| ------ | ----------------------- | ------------------------------------- |
+| All    | Polling + Processing    | Local dev / simple single-node deploy |
+| Poller | Polling only            | Dedicated ingestion node              |
+| Worker | Processing only         | Horizontal scale-out workers          |
+
+Example environment overrides:
+
+```
+Pipeline__Role=Poller
+
+Pipeline__Role=Worker
+```
+
+`Pipeline__Role` fully determines polling vs processing. The only remaining feature flag in this area is `Features__EnableFileTransfer` which toggles actual file copy/move side effects.

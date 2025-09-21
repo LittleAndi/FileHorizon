@@ -28,10 +28,9 @@ services:
       Logging__LogLevel__Default: Information
       Logging__LogLevel__Microsoft: Warning
       Logging__LogLevel__Microsoft.Hosting.Lifetime: Information
-      Logging__LogLevel__FileHorizon: Information
-      # Feature flags
-      Features__EnablePolling: "true"
-      Features__EnableProcessing: "false"
+      Logging__LogLevel__FileHorizon: Debug
+      # Role + feature flags
+      Pipeline__Role: "Poller"
       Features__EnableFileTransfer: "false"
       # Polling behavior
       Polling__IntervalMilliseconds: 1000
@@ -88,10 +87,9 @@ services:
       Logging__LogLevel__Default: Warning
       Logging__LogLevel__Microsoft: Warning
       Logging__LogLevel__Microsoft.Hosting.Lifetime: Warning
-      Logging__LogLevel__FileHorizon: Information
-      # Feature flags
-      Features__EnablePolling: "false"
-      Features__EnableProcessing: "true"
+      Logging__LogLevel__FileHorizon: Debug
+      # Role + feature flags
+      Pipeline__Role: "Worker"
       Features__EnableFileTransfer: "true"
       # Polling behavior
       Polling__IntervalMilliseconds: 1000

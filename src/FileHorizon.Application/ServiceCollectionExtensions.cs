@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using FileHorizon.Application.Configuration;
 using Microsoft.Extensions.Logging; // added
+using Microsoft.Extensions.Hosting; // added
 
 namespace FileHorizon.Application;
 
@@ -47,6 +48,55 @@ public static class ServiceCollectionExtensions
                 validator);
         });
 
+        // Options placeholders (bound in host layer)
+        services.AddOptions<PipelineOptions>();
+        services.AddOptions<PollingOptions>();
+        services.AddOptions<PipelineFeaturesOptions>(); // retained only for EnableFileTransfer gating
+
+        // Register concrete background service implementations as singletons (not hosted yet)
+        services.AddSingleton<Infrastructure.Orchestration.FilePollingBackgroundService>();
+        services.AddSingleton<Infrastructure.Orchestration.FileProcessingBackgroundService>();
+
+        // Composite hosted service decides at runtime which underlying services to start.
+        services.AddSingleton<IHostedService>(sp =>
+        {
+            var role = sp.GetRequiredService<IOptions<PipelineOptions>>().Value.Role;
+            var polling = sp.GetRequiredService<Infrastructure.Orchestration.FilePollingBackgroundService>();
+            var processing = sp.GetRequiredService<Infrastructure.Orchestration.FileProcessingBackgroundService>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("PipelineRoleSelector");
+            return role switch
+            {
+                PipelineRole.Poller => new CompositeHostedService(logger, polling),
+                PipelineRole.Worker => new CompositeHostedService(logger, processing),
+                PipelineRole.All => new CompositeHostedService(logger, polling, processing),
+                _ => new CompositeHostedService(logger, polling, processing)
+            };
+        });
+
         return services;
+    }
+
+    private sealed class CompositeHostedService(ILogger logger, params IHostedService[] hostedServices) : IHostedService
+    {
+        private readonly IReadOnlyList<IHostedService> _services = hostedServices;
+        private readonly ILogger _logger = logger;
+
+        public async Task StartAsync(CancellationToken cancellationToken)
+        {
+            foreach (var svc in _services)
+            {
+                _logger.LogInformation("Starting hosted service {Service}", svc.GetType().Name);
+                await svc.StartAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        public async Task StopAsync(CancellationToken cancellationToken)
+        {
+            foreach (var svc in _services.Reverse())
+            {
+                _logger.LogInformation("Stopping hosted service {Service}", svc.GetType().Name);
+                await svc.StopAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 }
