@@ -1,8 +1,10 @@
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
+using FileHorizon.Application.Common.Telemetry;
 using FileHorizon.Application.Configuration;
-using Microsoft.Extensions.Logging; // added
-using Microsoft.Extensions.Hosting; // added
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using System.Diagnostics;
 
 namespace FileHorizon.Application;
 
@@ -80,14 +82,19 @@ public static class ServiceCollectionExtensions
     {
         private readonly IReadOnlyList<IHostedService> _services = hostedServices;
         private readonly ILogger _logger = logger;
+        private Activity? _lifecycleActivity;
 
         public async Task StartAsync(CancellationToken cancellationToken)
         {
+            _lifecycleActivity = TelemetryInstrumentation.ActivitySource.StartActivity("pipeline.lifetime", ActivityKind.Internal);
+            _lifecycleActivity?.SetTag("pipeline.service.count", _services.Count);
             foreach (var svc in _services)
             {
                 _logger.LogInformation("Starting hosted service {Service}", svc.GetType().Name);
+                _lifecycleActivity?.AddEvent(new ActivityEvent($"start:{svc.GetType().Name}"));
                 await svc.StartAsync(cancellationToken).ConfigureAwait(false);
             }
+            _lifecycleActivity?.SetStatus(ActivityStatusCode.Ok);
         }
 
         public async Task StopAsync(CancellationToken cancellationToken)
@@ -95,8 +102,10 @@ public static class ServiceCollectionExtensions
             foreach (var svc in _services.Reverse())
             {
                 _logger.LogInformation("Stopping hosted service {Service}", svc.GetType().Name);
+                _lifecycleActivity?.AddEvent(new ActivityEvent($"stop:{svc.GetType().Name}"));
                 await svc.StopAsync(cancellationToken).ConfigureAwait(false);
             }
+            _lifecycleActivity?.Dispose();
         }
     }
 }
