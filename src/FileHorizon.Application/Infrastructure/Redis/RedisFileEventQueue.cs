@@ -227,24 +227,25 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
                 ">",
                 count: maxCount);
             if (entries.Length == 0) return Array.Empty<FileEvent>();
+
             var list = new List<FileEvent>(entries.Length);
-            foreach (var e in entries)
+            foreach (var entry in entries)
             {
-                var fe = MapEntryToFileEvent(e);
+                var fe = MapEntryToFileEvent(entry);
+
+                // Always attempt to acknowledge (even malformed) to avoid stuck entries.
+                if (!entry.Id.IsNullOrEmpty)
+                {
+                    _ = _db.StreamAcknowledgeAsync(_options.StreamName, _options.ConsumerGroup, entry.Id); // fire & forget
+                }
+
                 if (fe != null)
                 {
                     list.Add(fe);
-                    if (!e.Id.IsNullOrEmpty)
-                    {
-                        _ = _db.StreamAcknowledgeAsync(_options.StreamName, _options.ConsumerGroup, e.Id); // fire and forget ack
-                    }
                 }
                 else
                 {
-                    if (!e.Id.IsNullOrEmpty)
-                    {
-                        _ = _db.StreamAcknowledgeAsync(_options.StreamName, _options.ConsumerGroup, e.Id);
-                    }
+                    _logger.LogDebug("Malformed stream entry {EntryId} ignored during TryDrain", entry.Id);
                 }
             }
             return list;
