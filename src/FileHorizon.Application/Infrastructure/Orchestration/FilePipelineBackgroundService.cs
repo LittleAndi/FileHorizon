@@ -38,48 +38,12 @@ public sealed class FilePipelineBackgroundService : BackgroundService
         _logger.LogInformation("File pipeline service starting");
         while (!stoppingToken.IsCancellationRequested)
         {
-            var interval = _options.CurrentValue.IntervalMilliseconds;
+            var cycleStart = DateTimeOffset.UtcNow;
+            var optionsSnapshot = _options.CurrentValue;
+
             try
             {
-                var cycleStart = DateTimeOffset.UtcNow;
-                _logger.LogDebug("Pipeline cycle start at {StartUtc} (interval {Interval}ms)", cycleStart, interval);
-                // 1. Poll source once per cycle
-                var pollResult = await _poller.PollAsync(stoppingToken).ConfigureAwait(false);
-                if (pollResult.IsFailure)
-                {
-                    _logger.LogWarning("Polling failed: {Error}", pollResult.Error);
-                }
-
-                // 2. Drain up to batch limit without blocking
-                var batchLimit = _options.CurrentValue.BatchReadLimit;
-                var drained = _queue.TryDrain(batchLimit);
-                if (drained.Count > 0)
-                {
-                    _logger.LogDebug("Processing {Count} file events", drained.Count);
-                }
-                var processed = 0;
-                foreach (var fe in drained)
-                {
-                    var result = await _processingService.HandleAsync(fe, stoppingToken).ConfigureAwait(false);
-                    if (!result.IsSuccess)
-                    {
-                        _logger.LogWarning("Processing failure for {FileId}: {Error}", fe.Id, result.Error);
-                    }
-                    processed++;
-                }
-
-                // 3. Sleep until next cycle accounting for work duration
-                var elapsed = (int)(DateTimeOffset.UtcNow - cycleStart).TotalMilliseconds;
-                if (elapsed > interval)
-                {
-                    _logger.LogWarning("Pipeline cycle overran interval: elapsed {Elapsed}ms > interval {Interval}ms", elapsed, interval);
-                }
-                else
-                {
-                    var remaining = interval - elapsed;
-                    await Task.Delay(remaining, stoppingToken).ConfigureAwait(false);
-                }
-                _logger.LogDebug("Pipeline cycle end (elapsed {Elapsed}ms)", elapsed);
+                await RunCycleAsync(optionsSnapshot, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -88,10 +52,51 @@ public sealed class FilePipelineBackgroundService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unhandled exception in pipeline loop");
-                // brief backoff to avoid tight crash loop
-                await Task.Delay(Math.Min(2000, _options.CurrentValue.IntervalMilliseconds), stoppingToken).ConfigureAwait(false);
+                // brief backoff
+                var backoff = Math.Min(2000, optionsSnapshot.IntervalMilliseconds);
+                await Task.Delay(backoff, stoppingToken).ConfigureAwait(false);
+            }
+
+            var elapsedMs = (int)(DateTimeOffset.UtcNow - cycleStart).TotalMilliseconds;
+            var remaining = optionsSnapshot.IntervalMilliseconds - elapsedMs;
+            if (remaining > 0)
+            {
+                await Task.Delay(remaining, stoppingToken).ConfigureAwait(false);
+            }
+            else if (elapsedMs > optionsSnapshot.IntervalMilliseconds)
+            {
+                _logger.LogWarning("Pipeline cycle overran interval: elapsed {Elapsed}ms > interval {Interval}ms",
+                    elapsedMs, optionsSnapshot.IntervalMilliseconds);
             }
         }
         _logger.LogInformation("File pipeline service stopping");
+    }
+
+    private async Task RunCycleAsync(PollingOptions options, CancellationToken ct)
+    {
+        _logger.LogDebug("Pipeline cycle start (interval {Interval}ms)", options.IntervalMilliseconds);
+
+        var pollResult = await _poller.PollAsync(ct).ConfigureAwait(false);
+        if (pollResult.IsFailure)
+        {
+            _logger.LogWarning("Polling failed: {Error}", pollResult.Error);
+        }
+
+        var events = _queue.TryDrain(options.BatchReadLimit);
+        if (events.Count > 0)
+        {
+            _logger.LogDebug("Processing {Count} file events", events.Count);
+        }
+
+        foreach (var fe in events)
+        {
+            var result = await _processingService.HandleAsync(fe, ct).ConfigureAwait(false);
+            if (!result.IsSuccess)
+            {
+                _logger.LogWarning("Processing failure for {FileId}: {Error}", fe.Id, result.Error);
+            }
+        }
+
+        _logger.LogDebug("Pipeline cycle end");
     }
 }
