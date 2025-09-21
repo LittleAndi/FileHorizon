@@ -1,5 +1,4 @@
 using FileHorizon.Application.Abstractions;
-using FileHorizon.Application.Common;
 using FileHorizon.Application.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -11,27 +10,20 @@ namespace FileHorizon.Application.Infrastructure.Orchestration;
 /// Background service that coordinates polling for new file events and processing queued events.
 /// Simple sequential implementation (poll, then drain limited batch).
 /// </summary>
-public sealed class FilePipelineBackgroundService : BackgroundService
+public sealed class FilePipelineBackgroundService(
+    IFilePoller poller,
+    IFileEventQueue queue,
+    Core.IFileProcessingService processingService,
+    ILogger<FilePipelineBackgroundService> logger,
+    IOptionsMonitor<PollingOptions> pollingOptions,
+    IOptionsMonitor<PipelineFeaturesOptions> featureOptions) : BackgroundService
 {
-    private readonly IFilePoller _poller;
-    private readonly IFileEventQueue _queue;
-    private readonly Core.IFileProcessingService _processingService;
-    private readonly ILogger<FilePipelineBackgroundService> _logger;
-    private readonly IOptionsMonitor<PollingOptions> _options;
-
-    public FilePipelineBackgroundService(
-        IFilePoller poller,
-        IFileEventQueue queue,
-        Core.IFileProcessingService processingService,
-        ILogger<FilePipelineBackgroundService> logger,
-        IOptionsMonitor<PollingOptions> options)
-    {
-        _poller = poller;
-        _queue = queue;
-        _processingService = processingService;
-        _logger = logger;
-        _options = options;
-    }
+    private readonly IFilePoller _poller = poller;
+    private readonly IFileEventQueue _queue = queue;
+    private readonly Core.IFileProcessingService _processingService = processingService;
+    private readonly ILogger<FilePipelineBackgroundService> _logger = logger;
+    private readonly IOptionsMonitor<PollingOptions> _options = pollingOptions;
+    private readonly IOptionsMonitor<PipelineFeaturesOptions> _featureOptions = featureOptions;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -74,12 +66,29 @@ public sealed class FilePipelineBackgroundService : BackgroundService
 
     private async Task RunCycleAsync(PollingOptions options, CancellationToken ct)
     {
+        var features = _featureOptions.CurrentValue;
+
         _logger.LogDebug("Pipeline cycle start (interval {Interval}ms)", options.IntervalMilliseconds);
 
-        var pollResult = await _poller.PollAsync(ct).ConfigureAwait(false);
-        if (pollResult.IsFailure)
+        // Poll phase
+        if (features?.EnablePolling == true)
         {
-            _logger.LogWarning("Polling failed: {Error}", pollResult.Error);
+            var pollResult = await _poller.PollAsync(ct).ConfigureAwait(false);
+            if (pollResult.IsFailure)
+            {
+                _logger.LogWarning("Polling failed: {Error}", pollResult.Error);
+            }
+        }
+        else
+        {
+            _logger.LogTrace("Polling disabled via feature flags - skipping poll cycle");
+        }
+
+        // Processing phase
+        if (features?.EnableProcessing != true)
+        {
+            _logger.LogTrace("Processing disabled via feature flags - skipping processing cycle");
+            return;
         }
 
         var events = _queue.TryDrain(options.BatchReadLimit);
