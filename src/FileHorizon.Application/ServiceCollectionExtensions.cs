@@ -55,6 +55,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<PipelineOptions>();
         services.AddOptions<PollingOptions>();
         services.AddOptions<PipelineFeaturesOptions>(); // retained only for EnableFileTransfer gating
+        services.AddOptions<Configuration.RemoteFileSourcesOptions>(); // remote FTP/SFTP sources
 
         // Register concrete background service implementations as singletons (not hosted yet)
         services.AddSingleton<Infrastructure.Orchestration.FilePollingBackgroundService>();
