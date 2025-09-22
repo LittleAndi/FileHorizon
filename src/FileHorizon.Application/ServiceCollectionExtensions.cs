@@ -61,6 +61,9 @@ public static class ServiceCollectionExtensions
         services.AddOptions<Configuration.RemoteFileSourcesOptions>(); // remote FTP/SFTP sources
         services.AddSingleton<IValidateOptions<Configuration.RemoteFileSourcesOptions>, Configuration.RemoteFileSourcesOptionsValidator>();
 
+        // Secret resolution (dev placeholder). Host layer can replace with Key Vault implementation.
+        services.AddSingleton<Abstractions.ISecretResolver, Infrastructure.Secrets.InMemorySecretResolver>();
+
         // Register concrete background service implementations as singletons (not hosted yet)
         services.AddSingleton<Infrastructure.Orchestration.FilePollingBackgroundService>();
         services.AddSingleton<Infrastructure.Orchestration.FileProcessingBackgroundService>();

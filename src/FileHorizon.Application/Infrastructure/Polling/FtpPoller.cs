@@ -7,10 +7,15 @@ using Microsoft.Extensions.Options;
 
 namespace FileHorizon.Application.Infrastructure.Polling;
 
-public sealed class FtpPoller(IFileEventQueue queue, IOptionsMonitor<RemoteFileSourcesOptions> remoteOptions, ILogger<FtpPoller> logger, ILoggerFactory loggerFactory) : RemotePollerBase(queue, remoteOptions, logger)
+public sealed class FtpPoller(IFileEventQueue queue,
+    IOptionsMonitor<RemoteFileSourcesOptions> remoteOptions,
+    ILogger<FtpPoller> logger,
+    ILoggerFactory loggerFactory,
+    FileHorizon.Application.Abstractions.ISecretResolver secretResolver) : RemotePollerBase(queue, remoteOptions, logger)
 {
     private readonly ILoggerFactory _loggerFactory = loggerFactory;
     private readonly IOptionsMonitor<RemoteFileSourcesOptions> _remoteOptions = remoteOptions;
+    private readonly FileHorizon.Application.Abstractions.ISecretResolver _secretResolver = secretResolver;
 
     protected override List<IRemoteFileSourceDescriptor> GetEnabledSources()
     {
@@ -26,13 +31,13 @@ public sealed class FtpPoller(IFileEventQueue queue, IOptionsMonitor<RemoteFileS
     protected override IRemoteFileClient CreateClient(IRemoteFileSourceDescriptor source)
     {
         var s = ((FtpSourceDescriptor)source).Options;
-        return new FtpRemoteFileClient(
-            _loggerFactory.CreateLogger<FtpRemoteFileClient>(),
-            s.Host,
-            s.Port,
-            s.Username,
-            password: null, // password will be resolved and set before constructing in future secret integration
-            s.Passive);
+        string? password = null;
+        if (!string.IsNullOrWhiteSpace(s.PasswordSecretRef))
+        {
+            // Best effort sync wait kept minimal because remote poll cycle is already async. We design secret resolution to be fast/cached.
+            password = _secretResolver.ResolveSecretAsync(s.PasswordSecretRef).GetAwaiter().GetResult();
+        }
+        return new FtpRemoteFileClient(_loggerFactory.CreateLogger<FtpRemoteFileClient>(), s.Host, s.Port, s.Username, password, s.Passive);
     }
 
     protected override ProtocolType MapProtocolType(ProtocolType protocol) => ProtocolType.Ftp;
