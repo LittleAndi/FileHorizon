@@ -19,6 +19,9 @@ public abstract class RemotePollerBase : IFilePoller
     private readonly ILogger _logger;
     private readonly IOptionsMonitor<RemoteFileSourcesOptions> _remoteOptions;
     private readonly ConcurrentDictionary<string, FileObservationSnapshot> _observations = new();
+    private readonly ConcurrentDictionary<string, BackoffState> _backoff = new();
+    private readonly TimeSpan _baseBackoff = TimeSpan.FromSeconds(5);
+    private readonly TimeSpan _maxBackoff = TimeSpan.FromMinutes(5);
 
     protected RemotePollerBase(IFileEventQueue queue, IOptionsMonitor<RemoteFileSourcesOptions> remoteOptions, ILogger logger)
     {
@@ -48,9 +51,15 @@ public abstract class RemotePollerBase : IFilePoller
         foreach (var src in sources)
         {
             if (ct.IsCancellationRequested) break;
+            if (IsSourceInBackoff(src.Name, out var remaining))
+            {
+                _logger.LogTrace("Skipping source {Source} due to backoff (remaining {RemainingMs}ms)", src.Name, (int)remaining.TotalMilliseconds);
+                continue;
+            }
             try
             {
                 await PollSourceAsync(src, ct).ConfigureAwait(false);
+                ResetBackoff(src.Name);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -60,6 +69,7 @@ public abstract class RemotePollerBase : IFilePoller
             {
                 _logger.LogWarning(ex, "Poll of remote source {SourceName} failed", src.Name);
                 Common.Telemetry.TelemetryInstrumentation.PollSourceErrors.Add(1, KeyValuePair.Create<string, object?>("poll.source", src.Name));
+                RegisterFailure(src.Name);
             }
         }
         var elapsed = (DateTimeOffset.UtcNow - cycleStart).TotalMilliseconds;
@@ -79,6 +89,7 @@ public abstract class RemotePollerBase : IFilePoller
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to connect to {Protocol} source {Name}@{Host}:{Port}", client.Protocol, source.Name, client.Host, client.Port);
+            RegisterFailure(source.Name);
             return;
         }
 
@@ -94,7 +105,11 @@ public abstract class RemotePollerBase : IFilePoller
             var now = DateTimeOffset.UtcNow;
             var newSnap = new FileObservationSnapshot(file.Size, file.LastWriteTimeUtc, previous?.FirstObservedUtc ?? now, now);
             _observations[key] = newSnap;
-            if (!ready) continue;
+            if (!ready)
+            {
+                Common.Telemetry.TelemetryInstrumentation.FilesSkippedUnstable.Add(1, KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()));
+                continue;
+            }
             if (previous is not null && previous.LastObservedUtc >= newSnap.LastObservedUtc)
             {
                 continue; // unchanged duplicate in same cycle
@@ -146,5 +161,45 @@ public abstract class RemotePollerBase : IFilePoller
         // credential material already resolved; secret refs are not exposed here
         string Host { get; }
         int Port { get; }
+    }
+
+    private sealed class BackoffState
+    {
+        public int Failures { get; set; }
+        public DateTimeOffset NextAttemptUtc { get; set; }
+    }
+
+    private bool IsSourceInBackoff(string sourceName, out TimeSpan remaining)
+    {
+        if (_backoff.TryGetValue(sourceName, out var s))
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (s.NextAttemptUtc > now)
+            {
+                remaining = s.NextAttemptUtc - now;
+                return true;
+            }
+        }
+        remaining = TimeSpan.Zero;
+        return false;
+    }
+
+    private void RegisterFailure(string sourceName)
+    {
+        var state = _backoff.AddOrUpdate(sourceName, _ => new BackoffState { Failures = 1 }, (_, existing) => { existing.Failures++; return existing; });
+        var exponent = Math.Min(state.Failures - 1, 6); // cap growth
+        var delay = TimeSpan.FromMilliseconds(_baseBackoff.TotalMilliseconds * Math.Pow(2, exponent));
+        if (delay > _maxBackoff) delay = _maxBackoff;
+        state.NextAttemptUtc = DateTimeOffset.UtcNow + delay;
+        _backoff[sourceName] = state;
+        _logger.LogDebug("Source {Source} backoff scheduled for {DelaySeconds}s after {Failures} failures", sourceName, (int)delay.TotalSeconds, state.Failures);
+    }
+
+    private void ResetBackoff(string sourceName)
+    {
+        if (_backoff.TryRemove(sourceName, out _))
+        {
+            _logger.LogTrace("Reset backoff for source {Source}", sourceName);
+        }
     }
 }
