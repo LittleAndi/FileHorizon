@@ -35,11 +35,16 @@ public abstract class RemotePollerBase : IFilePoller
 
     public async Task<Result> PollAsync(CancellationToken ct)
     {
+        var cycleStart = DateTimeOffset.UtcNow;
+        using var cycleActivity = Common.Telemetry.TelemetryInstrumentation.ActivitySource.StartActivity("poll.remote.cycle", System.Diagnostics.ActivityKind.Internal);
         var sources = GetEnabledSources();
         if (sources.Count == 0)
         {
+            cycleActivity?.SetTag("sources.count", 0);
             return Result.Success();
         }
+        cycleActivity?.SetTag("sources.count", sources.Count);
+        Common.Telemetry.TelemetryInstrumentation.PollCycles.Add(1);
         foreach (var src in sources)
         {
             if (ct.IsCancellationRequested) break;
@@ -54,13 +59,18 @@ public abstract class RemotePollerBase : IFilePoller
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Poll of remote source {SourceName} failed", src.Name);
+                Common.Telemetry.TelemetryInstrumentation.PollSourceErrors.Add(1, KeyValuePair.Create<string, object?>("poll.source", src.Name));
             }
         }
+        var elapsed = (DateTimeOffset.UtcNow - cycleStart).TotalMilliseconds;
+        Common.Telemetry.TelemetryInstrumentation.PollCycleDurationMs.Record(elapsed);
         return Result.Success();
     }
 
     private async Task PollSourceAsync(IRemoteFileSourceDescriptor source, CancellationToken ct)
     {
+        using var sourceActivity = Common.Telemetry.TelemetryInstrumentation.ActivitySource.StartActivity("poll.remote.source", System.Diagnostics.ActivityKind.Internal);
+        sourceActivity?.SetTag("poll.source", source.Name);
         await using var client = CreateClient(source);
         try
         {
@@ -117,6 +127,7 @@ public abstract class RemotePollerBase : IFilePoller
         else
         {
             _logger.LogDebug("Enqueued remote file {Key} ({Protocol})", identityKey, client.Protocol);
+            Common.Telemetry.TelemetryInstrumentation.FilesDiscovered.Add(1, KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()));
         }
     }
 
