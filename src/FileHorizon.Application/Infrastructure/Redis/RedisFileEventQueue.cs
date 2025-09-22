@@ -6,6 +6,8 @@ using FileHorizon.Application.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
+using FileHorizon.Application.Common.Telemetry;
+using System.Diagnostics;
 
 namespace FileHorizon.Application.Infrastructure.Redis;
 
@@ -82,10 +84,12 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
         var validation = _validator.Validate(fileEvent);
         if (validation.IsFailure)
         {
+            TelemetryInstrumentation.QueueEnqueueFailures.Add(1);
             return Result.Failure(validation.Error);
         }
         if (ct.IsCancellationRequested)
         {
+            TelemetryInstrumentation.QueueEnqueueFailures.Add(1);
             return Result.Failure(Error.Unspecified("Queue.EnqueueCancelled", "Enqueue was cancelled"));
         }
 
@@ -104,13 +108,21 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
 
         try
         {
+            using var activity = TelemetryInstrumentation.ActivitySource.StartActivity("queue.enqueue", ActivityKind.Producer);
+            activity?.SetTag("messaging.system", "redis");
+            activity?.SetTag("messaging.destination", _options.StreamName);
+            activity?.SetTag("file.id", fileEvent.Id);
+            activity?.SetTag("file.protocol", fileEvent.Protocol);
             var entryId = await _db.StreamAddAsync(_options.StreamName, values).ConfigureAwait(false);
+            TelemetryInstrumentation.QueueEnqueued.Add(1);
             _logger.LogDebug("Enqueued file event {FileId} as stream entry {EntryId}", fileEvent.Id, entryId);
+            activity?.SetStatus(ActivityStatusCode.Ok);
             return Result.Success();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to enqueue file event {FileId}", fileEvent.Id);
+            TelemetryInstrumentation.QueueEnqueueFailures.Add(1);
             return Result.Failure(Error.Unspecified("Redis.EnqueueFailed", ex.Message));
         }
     }
@@ -123,6 +135,7 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
             if (entries is null)
             {
                 // transient error already logged + backoff applied inside TryReadBatchAsync
+                TelemetryInstrumentation.QueueDequeueFailures.Add(1);
                 continue;
             }
 
@@ -132,15 +145,24 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
                 continue;
             }
 
+            using var activity = TelemetryInstrumentation.ActivitySource.StartActivity("queue.dequeue", ActivityKind.Consumer);
+            activity?.SetTag("messaging.system", "redis");
+            activity?.SetTag("messaging.destination", _options.StreamName);
+            activity?.SetTag("messaging.batch.message_count", entries.Length);
+            int yielded = 0;
             foreach (var entry in entries)
             {
                 if (ct.IsCancellationRequested) yield break;
                 var fe = await ProcessEntryAsync(entry).ConfigureAwait(false);
                 if (fe != null)
                 {
+                    TelemetryInstrumentation.QueueDequeued.Add(1);
                     yield return fe;
+                    yielded++;
                 }
             }
+            activity?.SetTag("messaging.batch.yielded", yielded);
+            activity?.SetStatus(ActivityStatusCode.Ok);
         }
     }
 

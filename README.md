@@ -220,6 +220,141 @@ find . -maxdepth 1 -type f | wc -l
 
 ---
 
+## Observability (OpenTelemetry)
+
+FileHorizon ships with unified tracing, metrics, and structured logging via **OpenTelemetry**. No other logging framework is used.
+
+### What Is Collected
+
+- Traces: file processing spans (`file.process`), queue enqueue/dequeue spans (`queue.enqueue`, `queue.dequeue`), lifecycle span (`pipeline.lifetime`).
+- Metrics (Meter `FileHorizon`):
+  - `files.processed` (counter)
+  - `files.failed` (counter)
+  - `queue.enqueued` (counter)
+  - `queue.enqueue.failures` (counter)
+  - `queue.dequeued` (counter)
+  - `queue.dequeue.failures` (counter)
+  - `processing.duration.ms` (histogram)
+
+### Prometheus Endpoint
+
+If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus scrape format. Health remains at `/health`.
+
+### Configuration
+
+`Telemetry` section (appsettings or env variables):
+
+| Key                     | Default                | Description                                                    |
+| ----------------------- | ---------------------- | -------------------------------------------------------------- |
+| `EnableTracing`         | true                   | Enable Activity/trace pipeline                                 |
+| `EnableMetrics`         | true                   | Enable metrics collection                                      |
+| `EnableLogging`         | true                   | Route structured logs through OTEL exporter                    |
+| `EnablePrometheus`      | true                   | Expose `/metrics` endpoint                                     |
+| `EnableOtlpExporter`    | false                  | Enable OTLP exporter for traces/metrics/logs                   |
+| `OtlpEndpoint`          | null                   | OTLP/gRPC or HTTP endpoint (e.g. `http://otel-collector:4317`) |
+| `OtlpHeaders`           | null                   | Additional OTLP headers (key=value;key2=value2)                |
+| `OtlpInsecure`          | false                  | Allow insecure (no TLS) if collector enforces it               |
+| `ServiceName`           | FileHorizon            | Override service.name resource attribute                       |
+| `ServiceVersion`        | Assembly version       | Override service.version                                       |
+| `DeploymentEnvironment` | ASPNETCORE_ENVIRONMENT | Adds `deployment.environment` attribute                        |
+
+Environment variable mapping uses double underscores, e.g.:
+
+```
+Telemetry__EnableOtlpExporter=true
+Telemetry__OtlpEndpoint=http://otel-collector:4317
+Telemetry__DeploymentEnvironment=dev
+```
+
+### Enabling OTLP Export
+
+Point to a collector (recommended) rather than vendors directly:
+
+```
+Telemetry__EnableOtlpExporter=true
+Telemetry__OtlpEndpoint=http://otel-collector:4317
+```
+
+If headers are required (HTTP/Protobuf variant):
+
+```
+Telemetry__OtlpHeaders=api-key=XYZ123
+```
+
+### Docker Compose Example (Prometheus + Collector)
+
+Add a collector and Prometheus service (sketch):
+
+```yaml
+	otel-collector:
+		image: otel/opentelemetry-collector:latest
+		command: ["--config=/etc/otel-collector-config.yaml"]
+		volumes:
+			- ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+		ports:
+			- "4317:4317" # OTLP gRPC
+
+	prometheus:
+		image: prom/prometheus:latest
+		volumes:
+			- ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+		ports:
+			- "9090:9090"
+```
+
+The application container only needs relevant environment variables; `/metrics` will be scraped by Prometheus.
+
+### Log Export
+
+Currently logs go through the OpenTelemetry logging provider. If an OTLP exporter is enabled they will be forwarded to the collector; otherwise they remain local (console).
+
+### Tag / Attribute Conventions (Initial)
+
+| Span                    | Key                             | Example                   |
+| ----------------------- | ------------------------------- | ------------------------- |
+| file.process            | `file.id`                       | `f_123`                   |
+| file.process            | `file.protocol`                 | `local`                   |
+| file.process            | `file.source_path`              | `/data/inbox/file1.txt`   |
+| file.process            | `file.size_bytes`               | `2048`                    |
+| queue.enqueue / dequeue | `messaging.system`              | `redis`                   |
+| queue.enqueue / dequeue | `messaging.destination`         | `filehorizon:file-events` |
+| queue.dequeue           | `messaging.batch.message_count` | `10`                      |
+
+These may evolve toward official semantic conventions as they stabilize.
+
+### Viewing Metrics Locally
+
+```
+curl http://localhost:8080/metrics | head -n 40
+```
+
+You should see counters like `files_processed_total` and `processing_duration_ms_bucket` (Prometheus histogram exposition).
+
+### Troubleshooting
+
+| Issue                  | Likely Cause           | Remedy                                                |
+| ---------------------- | ---------------------- | ----------------------------------------------------- |
+| No metrics at /metrics | Prometheus disabled    | Set `Telemetry__EnablePrometheus=true`                |
+| No traces in collector | OTLP exporter disabled | Set `Telemetry__EnableOtlpExporter=true` and endpoint |
+| Service name wrong     | Override provided      | Adjust `Telemetry__ServiceName`                       |
+| High cardinality risk  | Dynamic paths tagged   | Consider trimming or hashing path tags in future      |
+
+---
+
+## Future Telemetry Enhancements
+
+Planned / candidate improvements:
+
+- File size distribution histogram
+- Error categorization with semantic convention attributes (e.g. `error.type`)
+- Redis pending / claim latency metrics
+- Service Bus ingress / egress spans and metrics
+- De-duplication cache hit/miss counters
+- Optional span events for validation / archive stages
+- Configurable sampling (probabilistic/parent-based) via Telemetry options
+
+---
+
 Contributions welcome—feel free to open issues or draft PRs as the architecture evolves.
 
 ---

@@ -1,0 +1,69 @@
+{
+  "id": null,
+  "uid": "filehorizon-overview",
+  "title": "FileHorizon Overview",
+  "tags": ["filehorizon"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Files Processed (5m rate)",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "rate(files_processed_total[5m])", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "Processing Error Rate % (10m)",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "100 * (sum(rate(files_failed_total[10m])) / clamp_min(sum(rate(files_processed_total[10m])),1))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Processing Duration P95 (5m)",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(processing_duration_ms_bucket[5m])))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Queue Throughput (Enqueue vs Dequeue)",
+      "gridPos": { "x": 0, "y": 10, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum(rate(queue_enqueued_total[5m]))",
+          "legendFormat": "enqueued",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(queue_dequeued_total[5m]))",
+          "legendFormat": "dequeued",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Queue Lag (Enqueue - Dequeue)",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum(rate(queue_enqueued_total[5m])) - sum(rate(queue_dequeued_total[5m]))",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" }
+}
