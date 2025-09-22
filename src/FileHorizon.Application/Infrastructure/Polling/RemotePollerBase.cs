@@ -19,6 +19,8 @@ public abstract class RemotePollerBase : IFilePoller
     private readonly ILogger _logger;
     private readonly IOptionsMonitor<RemoteFileSourcesOptions> _remoteOptions;
     private readonly ConcurrentDictionary<string, FileObservationSnapshot> _observations = new();
+    // Tracks last dispatched (size, mtime) per identity to suppress duplicate events across cycles
+    private readonly ConcurrentDictionary<string, (long Size, DateTimeOffset MTime)> _dispatched = new();
     private readonly ConcurrentDictionary<string, BackoffState> _backoff = new();
     private readonly TimeSpan _baseBackoff = TimeSpan.FromSeconds(5);
     private readonly TimeSpan _maxBackoff = TimeSpan.FromMinutes(5);
@@ -101,6 +103,7 @@ public abstract class RemotePollerBase : IFilePoller
             if (file.IsDirectory) continue; // safety
             var key = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
             var previous = _observations.TryGetValue(key, out var snap) ? snap : null;
+            var alreadyDispatched = _dispatched.ContainsKey(key);
             var ready = await readiness.IsReadyAsync(file, previous, ct).ConfigureAwait(false);
             var now = DateTimeOffset.UtcNow;
             var newSnap = new FileObservationSnapshot(file.Size, file.LastWriteTimeUtc, previous?.FirstObservedUtc ?? now, now);
@@ -110,11 +113,13 @@ public abstract class RemotePollerBase : IFilePoller
                 Common.Telemetry.TelemetryInstrumentation.FilesSkippedUnstable.Add(1, KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()));
                 continue;
             }
-            if (previous is not null && previous.LastObservedUtc >= newSnap.LastObservedUtc)
+            // Suppress duplicate enqueue if file already dispatched and still ready (unchanged enough for readiness)
+            if (alreadyDispatched)
             {
-                continue; // unchanged duplicate in same cycle
+                continue; // duplicate unchanged file
             }
             await EnqueueEventAsync(source, client, file, key, ct).ConfigureAwait(false);
+            _dispatched[key] = (newSnap.Size, newSnap.LastWriteTimeUtc);
         }
     }
 
