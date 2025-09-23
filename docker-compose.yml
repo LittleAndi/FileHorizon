@@ -33,6 +33,9 @@ services:
       # Role + feature flags
       Pipeline__Role: "Poller"
       Features__EnableFileTransfer: "false"
+      Features__EnableLocalPoller: "true"
+      Features__EnableFtpPoller: "false"
+      Features__EnableSftpPoller: "false"
       # Polling behavior
       Polling__IntervalMilliseconds: 1000
       Polling__BatchReadLimit: 10
@@ -93,6 +96,9 @@ services:
       # Role + feature flags
       Pipeline__Role: "Worker"
       Features__EnableFileTransfer: "true"
+      Features__EnableLocalPoller: "false"
+      Features__EnableFtpPoller: "false"
+      Features__EnableSftpPoller: "false"
       # Polling behavior
       Polling__IntervalMilliseconds: 1000
       Polling__BatchReadLimit: 10
