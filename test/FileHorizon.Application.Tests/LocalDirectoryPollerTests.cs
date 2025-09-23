@@ -58,10 +58,10 @@ public class LocalDirectoryPollerTests
 
             var sourcesOptions = new FileSourcesOptions
             {
-                Sources = new List<FileSourceOptions>
-                {
+                Sources =
+                [
                     new() { Name = "test", Path = tempRoot, Pattern = "*.txt", Recursive = false, MinStableSeconds = 1 }
-                }
+                ]
             };
             var monitor = new OptionsMonitorStub<FileSourcesOptions>(sourcesOptions);
             var queue = new TestQueue();
@@ -80,7 +80,10 @@ public class LocalDirectoryPollerTests
                 break;
             }
             Assert.NotNull(first);
-            Assert.Equal(filePath, first!.Metadata.SourcePath);
+            // Local identity now normalized to forward-slash absolute path starting with '/'
+            var normalized = filePath.Replace("\\", "/");
+            if (!normalized.StartsWith('/')) normalized = "/" + normalized;
+            Assert.Equal(normalized, first!.Metadata.SourcePath);
         }
         finally
         {
