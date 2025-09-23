@@ -19,11 +19,47 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Abstractions.IFileProcessor, Infrastructure.FileProcessing.LocalFileTransferProcessor>();
         services.AddSingleton<Abstractions.IFileEventValidator, Validation.BasicFileEventValidator>();
 
-        // Register protocol-specific pollers (local always; remote optional - feature flags can further refine later)
         services.AddSingleton<Infrastructure.Polling.LocalDirectoryPoller>();
-        services.AddSingleton<Infrastructure.Polling.FtpPoller>();
-        services.AddSingleton<Infrastructure.Polling.SftpPoller>();
-        services.AddSingleton<Infrastructure.Polling.MultiProtocolPoller>();
+        services.AddSingleton<Abstractions.IFilePoller>(sp =>
+        {
+            var features = sp.GetRequiredService<IOptions<PipelineFeaturesOptions>>().Value;
+            if (!features.EnableLocalPoller)
+            {
+                throw new InvalidOperationException("Local poller requested but EnableLocalPoller=false");
+            }
+            return sp.GetRequiredService<Infrastructure.Polling.LocalDirectoryPoller>();
+        });
+        services.AddSingleton<Infrastructure.Polling.FtpPoller>(sp =>
+        {
+            var features = sp.GetRequiredService<IOptions<PipelineFeaturesOptions>>().Value;
+            if (!features.EnableFtpPoller) throw new InvalidOperationException("FtpPoller requested but feature flag disabled");
+            return ActivatorUtilities.CreateInstance<Infrastructure.Polling.FtpPoller>(sp);
+        });
+        services.AddSingleton<Infrastructure.Polling.SftpPoller>(sp =>
+        {
+            var features = sp.GetRequiredService<IOptions<PipelineFeaturesOptions>>().Value;
+            if (!features.EnableSftpPoller) throw new InvalidOperationException("SftpPoller requested but feature flag disabled");
+            return ActivatorUtilities.CreateInstance<Infrastructure.Polling.SftpPoller>(sp);
+        });
+        services.AddSingleton<Infrastructure.Polling.MultiProtocolPoller>(sp =>
+        {
+            var features = sp.GetRequiredService<IOptions<PipelineFeaturesOptions>>().Value;
+            var pollers = new List<Abstractions.IFilePoller>();
+            if (features.EnableLocalPoller)
+            {
+                pollers.Add(sp.GetRequiredService<Infrastructure.Polling.LocalDirectoryPoller>());
+            }
+            if (features.EnableFtpPoller)
+            {
+                pollers.Add(sp.GetRequiredService<Infrastructure.Polling.FtpPoller>());
+            }
+            if (features.EnableSftpPoller)
+            {
+                pollers.Add(sp.GetRequiredService<Infrastructure.Polling.SftpPoller>());
+            }
+            return new Infrastructure.Polling.MultiProtocolPoller(pollers, sp.GetRequiredService<ILogger<Infrastructure.Polling.MultiProtocolPoller>>());
+        });
+        // Override IFilePoller to composite
         services.AddSingleton<Abstractions.IFilePoller>(sp => sp.GetRequiredService<Infrastructure.Polling.MultiProtocolPoller>());
 
         // Conditional queue registration: attempt Redis if enabled, else fallback to in-memory.
@@ -57,8 +93,8 @@ public static class ServiceCollectionExtensions
         // Options placeholders (bound in host layer)
         services.AddOptions<PipelineOptions>();
         services.AddOptions<PollingOptions>();
-        services.AddOptions<PipelineFeaturesOptions>(); // retained only for EnableFileTransfer gating
-        services.AddOptions<Configuration.RemoteFileSourcesOptions>(); // remote FTP/SFTP sources
+        services.AddOptions<PipelineFeaturesOptions>();
+        services.AddOptions<Configuration.RemoteFileSourcesOptions>();
         services.AddSingleton<IValidateOptions<Configuration.RemoteFileSourcesOptions>, Configuration.RemoteFileSourcesOptionsValidator>();
 
         // Secret resolution (dev placeholder). Host layer can replace with Key Vault implementation.
