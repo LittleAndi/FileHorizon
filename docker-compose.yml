@@ -35,10 +35,22 @@ services:
       Features__EnableFileTransfer: "false"
       Features__EnableLocalPoller: "true"
       Features__EnableFtpPoller: "false"
-      Features__EnableSftpPoller: "false"
+      Features__EnableSftpPoller: "true"
       # Polling behavior
       Polling__IntervalMilliseconds: 1000
       Polling__BatchReadLimit: 10
+      # Remote SFTP source (index 0 in RemoteFileSources)
+      RemoteFileSources__Sources__0__Name: PartnerSftp
+      RemoteFileSources__Sources__0__Protocol: Sftp
+      RemoteFileSources__Sources__0__Host: sftp
+      RemoteFileSources__Sources__0__Port: 22
+      RemoteFileSources__Sources__0__RemotePath: /home/demo/upload
+      RemoteFileSources__Sources__0__UsernameSecret: SFTP_USER
+      RemoteFileSources__Sources__0__PasswordSecret: SFTP_PASS
+      RemoteFileSources__Sources__0__MinStableSeconds: 5
+      # Dev secret values consumed by InMemorySecretResolver (simple env lookup)
+      SFTP_USER: demo
+      SFTP_PASS: password
       # Enable Redis queue
       Redis__Enabled: "true"
       Redis__Host: redis
@@ -72,6 +84,9 @@ services:
       - type: bind
         source: ./_data/outboxB
         target: /data/outboxB
+      - type: bind
+        source: ./_data/outboxC
+        target: /data/outboxC
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 15s
@@ -124,6 +139,7 @@ services:
       FileSources__Sources__1__MoveAfterProcessing: "true"
       FileSources__Sources__1__DestinationPath: /data/outboxB
       FileSources__Sources__1__CreateDestinationDirectories: "true"
+      # Destination C available for remote SFTP processed files
     deploy:
       replicas: 3
     volumes:
@@ -139,6 +155,9 @@ services:
       - type: bind
         source: ./_data/outboxB
         target: /data/outboxB
+      - type: bind
+        source: ./_data/outboxC
+        target: /data/outboxC
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 15s
@@ -182,6 +201,24 @@ services:
       prometheus:
         condition: service_started
     restart: unless-stopped
+
+  sftp:
+    image: atmoz/sftp:latest
+    container_name: filehorizon-sftp
+    # Format: user:password:uid:gid:subdir
+    command: "demo:password:1001:100:upload"
+    ports:
+      - "2222:22"
+    volumes:
+      - ./_data/sftp-in:/home/demo/upload
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo 'quit' | sftp -P 22 demo@localhost 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
 
 volumes:
   redis_data:
