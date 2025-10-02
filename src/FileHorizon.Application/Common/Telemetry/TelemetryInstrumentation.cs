@@ -14,6 +14,7 @@ public static class TelemetryInstrumentation
     // Counters
     public static readonly Counter<long> FilesProcessed = Meter.CreateCounter<long>("files.processed", description: "Number of files successfully processed");
     public static readonly Counter<long> FilesFailed = Meter.CreateCounter<long>("files.failed", description: "Number of files that failed processing");
+    public static readonly Counter<long> BytesCopied = Meter.CreateCounter<long>("bytes.copied", unit: "bytes", description: "Total bytes copied by sinks");
     public static readonly Counter<long> QueueEnqueued = Meter.CreateCounter<long>("queue.enqueued", description: "Number of file events enqueued");
     public static readonly Counter<long> QueueDequeued = Meter.CreateCounter<long>("queue.dequeued", description: "Number of file events dequeued");
     public static readonly Counter<long> QueueEnqueueFailures = Meter.CreateCounter<long>("queue.enqueue.failures", description: "Number of failed enqueue attempts");

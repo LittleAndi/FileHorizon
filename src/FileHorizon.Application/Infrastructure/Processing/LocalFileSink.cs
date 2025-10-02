@@ -2,6 +2,8 @@ using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Common;
 using FileHorizon.Application.Models;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
+using FileHorizon.Application.Common.Telemetry;
 
 namespace FileHorizon.Application.Infrastructure.Processing;
 
@@ -27,8 +29,21 @@ public sealed class LocalFileSink(ILogger<LocalFileSink> logger) : IFileSink
             }
 
             var mode = options?.Overwrite == true ? FileMode.Create : FileMode.CreateNew;
+            using var activity = TelemetryInstrumentation.ActivitySource.StartActivity("sink.write", ActivityKind.Internal);
+            activity?.SetTag("sink.name", Name);
+            activity?.SetTag("sink.target_path", destPath);
+
             await using var fs = new FileStream(destPath, mode, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await content.CopyToAsync(fs, 64 * 1024, ct).ConfigureAwait(false);
+            // Copy in chunks to count bytes
+            var buffer = new byte[64 * 1024];
+            long total = 0;
+            int read;
+            while ((read = await content.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0)
+            {
+                await fs.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                total += read;
+            }
+            TelemetryInstrumentation.BytesCopied.Add(total);
             return Result.Success();
         }
         catch (IOException ioEx) when (ioEx is not null)

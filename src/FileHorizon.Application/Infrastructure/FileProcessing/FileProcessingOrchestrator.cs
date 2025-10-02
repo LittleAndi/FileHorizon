@@ -101,7 +101,14 @@ public sealed class FileProcessingOrchestrator(
             Path: System.IO.Path.Combine(destRoot, plan.TargetPath),
             SourceName: plan.DestinationName);
 
-        var open = await reader.OpenReadAsync(sourceRef, ct).ConfigureAwait(false);
+        // Instrument reader open
+        Result<Stream> open;
+        using (var readActivity = TelemetryInstrumentation.ActivitySource.StartActivity("reader.open", ActivityKind.Internal))
+        {
+            readActivity?.SetTag("file.protocol", fileEvent.Protocol);
+            readActivity?.SetTag("file.source_path", sourceRef.Path);
+            open = await reader.OpenReadAsync(sourceRef, ct).ConfigureAwait(false);
+        }
         if (open.IsFailure)
         {
             return Result.Failure(open.Error);
