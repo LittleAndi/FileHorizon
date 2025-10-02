@@ -36,20 +36,16 @@ services:
       Features__EnableLocalPoller: "true"
       Features__EnableFtpPoller: "false"
       Features__EnableSftpPoller: "true"
-      # Polling behavior
-      Polling__IntervalMilliseconds: 1000
-      Polling__BatchReadLimit: 10
-      # Remote SFTP source (index 0 in RemoteFileSources)
-      RemoteFileSources__Sources__0__Name: PartnerSftp
-      RemoteFileSources__Sources__0__Protocol: Sftp
-      RemoteFileSources__Sources__0__Host: sftp
-      RemoteFileSources__Sources__0__Port: 22
-      RemoteFileSources__Sources__0__RemotePath: /home/demo/upload
-      RemoteFileSources__Sources__0__UsernameSecret: SFTP_USER
-      RemoteFileSources__Sources__0__PasswordSecret: SFTP_PASS
-      RemoteFileSources__Sources__0__MinStableSeconds: 5
+      # Remote SFTP source (index 0 in RemoteFileSources.Sftp)
+      RemoteFileSources__Sftp__0__Name: PartnerSftp
+      RemoteFileSources__Sftp__0__Host: sftp
+      RemoteFileSources__Sftp__0__Port: 22
+      RemoteFileSources__Sftp__0__RemotePath: /home/demo/upload
+      RemoteFileSources__Sftp__0__Username: demo
+      RemoteFileSources__Sftp__0__PasswordSecretRef: SFTP_PASS
+      RemoteFileSources__Sftp__0__MinStableSeconds: 5
+      RemoteFileSources__Sftp__0__DestinationPath: /data/outboxC
       # Dev secret values consumed by InMemorySecretResolver (simple env lookup)
-      SFTP_USER: demo
       SFTP_PASS: password
       # Enable Redis queue
       Redis__Enabled: "true"
@@ -212,13 +208,18 @@ services:
     volumes:
       - ./_data/sftp-in:/home/demo/upload
     healthcheck:
-      test: ["CMD", "bash", "-c", "echo 'quit' | sftp -P 22 demo@localhost 2>/dev/null || exit 1"]
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "echo 'quit' | sftp -P 22 demo@localhost 2>/dev/null || exit 1",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 10s
     restart: unless-stopped
-
 
 volumes:
   redis_data:
