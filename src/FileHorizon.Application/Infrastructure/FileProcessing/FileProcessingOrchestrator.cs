@@ -118,7 +118,17 @@ public sealed class FileProcessingOrchestrator(
     }
 
     private IFileContentReader? SelectReader(string protocol)
-        => _readers.FirstOrDefault(r => string.Equals(protocol, "local", StringComparison.OrdinalIgnoreCase) && r is Infrastructure.Processing.LocalFileContentReader);
+    {
+        if (string.Equals(protocol, "local", StringComparison.OrdinalIgnoreCase))
+        {
+            return _readers.FirstOrDefault(r => r is Infrastructure.Processing.LocalFileContentReader);
+        }
+        if (string.Equals(protocol, "sftp", StringComparison.OrdinalIgnoreCase))
+        {
+            return _readers.FirstOrDefault(r => r is Infrastructure.Processing.SftpFileContentReader);
+        }
+        return null;
+    }
 
     private string? ResolveLocalDestinationRoot(string destinationName)
     {

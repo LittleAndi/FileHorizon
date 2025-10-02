@@ -30,8 +30,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Abstractions.IFileEventValidator, Validation.BasicFileEventValidator>();
         // Processing adapters (initial local-only)
         services.AddSingleton<Abstractions.IFileContentReader, Infrastructure.Processing.LocalFileContentReader>();
+        services.AddSingleton<Abstractions.IFileContentReader, Infrastructure.Processing.SftpFileContentReader>();
         services.AddSingleton<Abstractions.IFileSink, Infrastructure.Processing.LocalFileSink>();
         services.AddSingleton<Abstractions.IFileRouter, Infrastructure.Processing.SimpleFileRouter>();
+
+        // Remote client factories
+        services.AddSingleton<Abstractions.ISftpClientFactory, Infrastructure.Remote.SshNetSftpClientFactory>();
 
         services.AddSingleton<Infrastructure.Polling.LocalDirectoryPoller>();
         services.AddSingleton<Abstractions.IFilePoller>(sp =>
