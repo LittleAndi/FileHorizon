@@ -65,6 +65,8 @@ public class FileProcessingOrchestratorTests
             readers,
             sinks,
             new StaticOptionsMonitor<DestinationsOptions>(destinations),
+            new StaticOptionsMonitor<IdempotencyOptions>(new IdempotencyOptions { Enabled = false }),
+            new Infrastructure.Idempotency.InMemoryIdempotencyStore(),
             NullLogger<FileProcessingOrchestrator>.Instance);
 
         var res = await orchestrator.ProcessAsync(ev, CancellationToken.None);

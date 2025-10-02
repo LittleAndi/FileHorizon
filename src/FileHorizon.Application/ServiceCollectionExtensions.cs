@@ -116,6 +116,22 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<Configuration.RoutingOptions>, Configuration.RoutingOptionsValidator>();
         services.AddOptions<Configuration.TransferOptions>();
         services.AddSingleton<IValidateOptions<Configuration.TransferOptions>, Configuration.TransferOptionsValidator>();
+        services.AddOptions<Configuration.IdempotencyOptions>();
+
+        // Idempotency store (choose Redis if enabled)
+        services.AddSingleton<Abstractions.IIdempotencyStore>(sp =>
+        {
+            var redis = sp.GetService<IOptions<RedisOptions>>()?.Value;
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            if (redis is { Enabled: true })
+            {
+                return new Infrastructure.Idempotency.RedisIdempotencyStore(
+                    loggerFactory.CreateLogger<Infrastructure.Idempotency.RedisIdempotencyStore>(),
+                    sp.GetRequiredService<IOptionsMonitor<RedisOptions>>()
+                );
+            }
+            return new Infrastructure.Idempotency.InMemoryIdempotencyStore();
+        });
 
         // Secret resolution (dev placeholder). Host layer can replace with Key Vault implementation.
         services.AddSingleton<Abstractions.ISecretResolver, Infrastructure.Secrets.InMemorySecretResolver>();

@@ -30,6 +30,7 @@ public class ServiceRegistrationTests
         services.AddSingleton<IOptions<RoutingOptions>>(Options.Create(new RoutingOptions()));
         services.AddSingleton<IOptions<TransferOptions>>(Options.Create(new TransferOptions()));
         services.AddSingleton<IOptions<PipelineOptions>>(Options.Create(new PipelineOptions()));
+        services.AddSingleton<IOptions<IdempotencyOptions>>(Options.Create(new IdempotencyOptions()));
         return services.BuildServiceProvider();
     }
 

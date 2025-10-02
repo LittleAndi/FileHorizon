@@ -18,12 +18,16 @@ public sealed class FileProcessingOrchestrator(
     IEnumerable<IFileContentReader> readers,
     IEnumerable<IFileSink> sinks,
     IOptionsMonitor<DestinationsOptions> destinations,
+    IOptionsMonitor<IdempotencyOptions> idempotencyOptions,
+    Abstractions.IIdempotencyStore idempotencyStore,
     ILogger<FileProcessingOrchestrator> logger) : IFileProcessor
 {
     private readonly IFileRouter _router = router;
     private readonly IEnumerable<IFileContentReader> _readers = readers;
     private readonly IEnumerable<IFileSink> _sinks = sinks;
     private readonly IOptionsMonitor<DestinationsOptions> _destinations = destinations;
+    private readonly IOptionsMonitor<IdempotencyOptions> _idempotencyOptions = idempotencyOptions;
+    private readonly Abstractions.IIdempotencyStore _idempotencyStore = idempotencyStore;
     private readonly ILogger<FileProcessingOrchestrator> _logger = logger;
 
     public async Task<Result> ProcessAsync(FileEvent fileEvent, CancellationToken ct)
@@ -31,6 +35,20 @@ public sealed class FileProcessingOrchestrator(
         using var activity = TelemetryInstrumentation.ActivitySource.StartActivity("file.orchestrate", ActivityKind.Internal);
         activity?.SetTag("file.protocol", fileEvent.Protocol);
         activity?.SetTag("file.source_path", fileEvent.Metadata.SourcePath);
+
+        // Idempotency check (optional)
+        var idemp = _idempotencyOptions.CurrentValue;
+        if (idemp.Enabled)
+        {
+            var key = $"file:{fileEvent.Id}";
+            var ttl = TimeSpan.FromSeconds(Math.Max(1, idemp.TtlSeconds));
+            var first = await _idempotencyStore.TryMarkProcessedAsync(key, ttl, ct).ConfigureAwait(false);
+            if (!first)
+            {
+                _logger.LogInformation("Skipping already-processed file event {Id}", fileEvent.Id);
+                return Result.Success();
+            }
+        }
 
         // Route to destinations
         var route = await _router.RouteAsync(fileEvent, ct).ConfigureAwait(false);
