@@ -136,6 +136,19 @@ services:
       - FileSources__Sources__1__DestinationPath=/data/outboxB
       - FileSources__Sources__1__CreateDestinationDirectories=true
       # Destination C available for remote SFTP processed files
+  # --- Orchestrated processing (optional) ---
+  # To enable the new orchestrated pipeline (router + protocol readers + sinks), uncomment below.
+  # Keep legacy FileSources above for default behavior; these settings are safe to leave commented.
+  # - Features__EnableOrchestratedProcessor=true
+  # - Destinations__Local__0__Name=OutboxA
+  # - Destinations__Local__0__BasePath=/data/outboxA
+  # - Destinations__Local__0__Overwrite=true
+  # - Routing__Rules__0__Match__Protocol=local
+  # - Routing__Rules__0__Match__PathPattern=^/data/inboxA/.+\\.txt$
+  # - Routing__Rules__0__Destination=OutboxA
+  # - Transfer__ChunkSizeBytes=32768
+  # - Transfer__Idempotency__Enabled=true
+  # - Transfer__Idempotency__TtlSeconds=86400
     deploy:
       replicas: 3
     volumes:
