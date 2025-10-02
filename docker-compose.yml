@@ -25,46 +25,46 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      LOG_CONSOLE_DEV: "true"
-      Logging__LogLevel__Default: Information
-      Logging__LogLevel__Microsoft: Warning
-      Logging__LogLevel__Microsoft.Hosting.Lifetime: Information
-      Logging__LogLevel__FileHorizon: Debug
+      - LOG_CONSOLE_DEV=true
+      - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__Microsoft=Warning
+      - Logging__LogLevel__Microsoft.Hosting.Lifetime=Information
+      - Logging__LogLevel__FileHorizon=Debug
       # Role + feature flags
-      Pipeline__Role: "Poller"
-      Features__EnableFileTransfer: "false"
-      Features__EnableLocalPoller: "true"
-      Features__EnableFtpPoller: "false"
-      Features__EnableSftpPoller: "true"
+      - Pipeline__Role=Poller
+      - Features__EnableFileTransfer=false
+      - Features__EnableLocalPoller=true
+      - Features__EnableFtpPoller=false
+      - Features__EnableSftpPoller=false
       # Remote SFTP source (index 0 in RemoteFileSources.Sftp)
-      RemoteFileSources__Sftp__0__Name: PartnerSftp
-      RemoteFileSources__Sftp__0__Host: sftp
-      RemoteFileSources__Sftp__0__Port: 22
-      RemoteFileSources__Sftp__0__RemotePath: /home/demo/upload
-      RemoteFileSources__Sftp__0__Username: demo
-      RemoteFileSources__Sftp__0__PasswordSecretRef: SFTP_PASS
-      RemoteFileSources__Sftp__0__MinStableSeconds: 5
-      RemoteFileSources__Sftp__0__DestinationPath: /data/outboxC
+      - RemoteFileSources__Sftp__0__Name=PartnerSftp
+      - RemoteFileSources__Sftp__0__Host=sftp
+      - RemoteFileSources__Sftp__0__Port=22
+      - RemoteFileSources__Sftp__0__RemotePath=/home/demo/upload
+      - RemoteFileSources__Sftp__0__Username=demo
+      - RemoteFileSources__Sftp__0__PasswordSecretRef=SFTP_PASS
+      - RemoteFileSources__Sftp__0__MinStableSeconds=5
+      - RemoteFileSources__Sftp__0__DestinationPath=/data/outboxC
       # Dev secret values consumed by InMemorySecretResolver (simple env lookup)
-      SFTP_PASS: password
+      - SFTP_PASS=password
       # Enable Redis queue
-      Redis__Enabled: "true"
-      Redis__Host: redis
-      Redis__Port: 6379
-      Redis__StreamName: filehorizon:file-events
-      Redis__ConsumerGroup: filehorizon-workers
-      Redis__ConsumerNamePrefix: fh
+      - Redis__Enabled=true
+      - Redis__Host=redis
+      - Redis__Port=6379
+      - Redis__StreamName=filehorizon:file-events
+      - Redis__ConsumerGroup=filehorizon-workers
+      - Redis__ConsumerNamePrefix=fh
       # Example file sources (adjust host paths as needed)
-      FileSources__Sources__0__Name: InboxA
-      FileSources__Sources__0__Path: /data/inboxA
-      FileSources__Sources__0__Pattern: "*.*"
-      FileSources__Sources__0__Recursive: "true"
-      FileSources__Sources__0__DestinationPath: /data/outboxA
-      FileSources__Sources__1__Name: InboxB
-      FileSources__Sources__1__Path: /data/inboxB
-      FileSources__Sources__1__Pattern: "*.*"
-      FileSources__Sources__1__Recursive: "true"
-      FileSources__Sources__1__DestinationPath: /data/outboxB
+      - FileSources__Sources__0__Name=InboxA
+      - FileSources__Sources__0__Path=/data/inboxA
+      - FileSources__Sources__0__Pattern=*.*
+      - FileSources__Sources__0__Recursive=true
+      - FileSources__Sources__0__DestinationPath=/data/outboxA
+      - FileSources__Sources__1__Name=InboxB
+      - FileSources__Sources__1__Path=/data/inboxB
+      - FileSources__Sources__1__Pattern=*.*
+      - FileSources__Sources__1__Recursive=true
+      - FileSources__Sources__1__DestinationPath=/data/outboxB
     ports:
       - "8080:8080" # only this one is published
     volumes:
@@ -99,42 +99,42 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      LOG_CONSOLE_DEV: "true"
-      Logging__LogLevel__Default: Warning
-      Logging__LogLevel__Microsoft: Warning
-      Logging__LogLevel__Microsoft.Hosting.Lifetime: Warning
-      Logging__LogLevel__FileHorizon: Debug
+      - LOG_CONSOLE_DEV=true
+      - Logging__LogLevel__Default=Warning
+      - Logging__LogLevel__Microsoft=Warning
+      - Logging__LogLevel__Microsoft.Hosting.Lifetime=Warning
+      - Logging__LogLevel__FileHorizon=Debug
       # Role + feature flags
-      Pipeline__Role: "Worker"
-      Features__EnableFileTransfer: "true"
-      Features__EnableLocalPoller: "false"
-      Features__EnableFtpPoller: "false"
-      Features__EnableSftpPoller: "false"
+      - Pipeline__Role=Worker
+      - Features__EnableFileTransfer=true
+      - Features__EnableLocalPoller=false
+      - Features__EnableFtpPoller=false
+      - Features__EnableSftpPoller=false
       # Polling behavior
-      Polling__IntervalMilliseconds: 1000
-      Polling__BatchReadLimit: 10
+      - Polling__IntervalMilliseconds=1000
+      - Polling__BatchReadLimit=10
       # Enable Redis queue
-      Redis__Enabled: "true"
-      Redis__Host: redis
-      Redis__Port: 6379
-      Redis__StreamName: filehorizon:file-events
-      Redis__ConsumerGroup: filehorizon-workers
-      Redis__ConsumerNamePrefix: fh
+      - Redis__Enabled=true
+      - Redis__Host=redis
+      - Redis__Port=6379
+      - Redis__StreamName=filehorizon:file-events
+      - Redis__ConsumerGroup=filehorizon-workers
+      - Redis__ConsumerNamePrefix=fh
       # Example file sources (adjust host paths as needed), needs to match the poller file sources
-      FileSources__Sources__0__Name: InboxA
-      FileSources__Sources__0__Path: /data/inboxA
-      FileSources__Sources__0__Pattern: "*.*"
-      FileSources__Sources__0__Recursive: "true"
-      FileSources__Sources__0__MoveAfterProcessing: "true"
-      FileSources__Sources__0__DestinationPath: /data/outboxA
-      FileSources__Sources__0__CreateDestinationDirectories: "true"
-      FileSources__Sources__1__Name: InboxB
-      FileSources__Sources__1__Path: /data/inboxB
-      FileSources__Sources__1__Pattern: "*.*"
-      FileSources__Sources__1__Recursive: "true"
-      FileSources__Sources__1__MoveAfterProcessing: "true"
-      FileSources__Sources__1__DestinationPath: /data/outboxB
-      FileSources__Sources__1__CreateDestinationDirectories: "true"
+      - FileSources__Sources__0__Name=InboxA
+      - FileSources__Sources__0__Path=/data/inboxA
+      - FileSources__Sources__0__Pattern=*.*
+      - FileSources__Sources__0__Recursive=true
+      - FileSources__Sources__0__MoveAfterProcessing=true
+      - FileSources__Sources__0__DestinationPath=/data/outboxA
+      - FileSources__Sources__0__CreateDestinationDirectories=true
+      - FileSources__Sources__1__Name=InboxB
+      - FileSources__Sources__1__Path=/data/inboxB
+      - FileSources__Sources__1__Pattern=*.*
+      - FileSources__Sources__1__Recursive=true
+      - FileSources__Sources__1__MoveAfterProcessing=true
+      - FileSources__Sources__1__DestinationPath=/data/outboxB
+      - FileSources__Sources__1__CreateDestinationDirectories=true
       # Destination C available for remote SFTP processed files
     deploy:
       replicas: 3
@@ -211,7 +211,7 @@ services:
       test:
         [
           "CMD",
-          "bash",
+          "sh",
           "-c",
           "echo 'quit' | sftp -P 22 demo@localhost 2>/dev/null || exit 1",
         ]
