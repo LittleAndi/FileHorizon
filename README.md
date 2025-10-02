@@ -67,13 +67,14 @@ File discovery is handled by protocol-specific pollers composed by a multi-proto
 
 Feature flags (section `Features`):
 
-| Flag                          | Default | Purpose                                                                                                                         |
-| ----------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `EnableLocalPoller`           | `true`  | Enable local/UNC directory polling sources configured under `FileSources` (legacy/local).                                       |
-| `EnableFtpPoller`             | `false` | Enable FTP remote sources listed in `RemoteFileSources:Sources`.                                                                |
-| `EnableSftpPoller`            | `false` | Enable SFTP remote sources listed in `RemoteFileSources:Sources`.                                                               |
-| `EnableFileTransfer`          | `false` | Perform the actual transfer/move (side effects). When `false`, pipeline simulates discovery only.                               |
-| `EnableOrchestratedProcessor` | `false` | Switch processing to the new orchestrated pipeline (router + protocol readers + sinks). When `false`, legacy processor is used. |
+| Flag                 | Default | Purpose                                                                                           |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `EnableLocalPoller`  | `true`  | Enable local/UNC directory polling sources configured under `FileSources` (legacy/local).         |
+| `EnableFtpPoller`    | `false` | Enable FTP remote sources listed in `RemoteFileSources:Sources`.                                  |
+| `EnableSftpPoller`   | `false` | Enable SFTP remote sources listed in `RemoteFileSources:Sources`.                                 |
+| `EnableFileTransfer` | `false` | Perform the actual transfer/move (side effects). When `false`, pipeline simulates discovery only. |
+
+<!-- Orchestrated processor is now the default; no flag required. -->
 
 Environment variable examples:
 
@@ -82,7 +83,6 @@ Features__EnableLocalPoller=true
 Features__EnableFtpPoller=false
 Features__EnableSftpPoller=true
 Features__EnableFileTransfer=true
-Features__EnableOrchestratedProcessor=true
 ```
 
 If all three poller flags are disabled the composite poller runs with an empty set (harmless no-op). This is useful for staging environments while only processing already enqueued events.
@@ -162,7 +162,7 @@ Each remote source tracks consecutive failures. An exponential backoff (base 5s 
 
 ## Orchestrated Processing and Routing (New)
 
-When `Features__EnableOrchestratedProcessor=true`, FileHorizon uses a modular orchestrator that selects a protocol-specific reader, routes the file via rules, and writes to a destination sink. This mode unlocks multi-destination routing and clearer separation of concerns.
+The orchestrated processor is enabled by default. It uses a modular orchestrator that selects a protocol-specific reader, routes the file via rules, and writes to a destination sink. This unlocks multi-destination routing and a clean separation of concerns.
 
 Key pieces:
 

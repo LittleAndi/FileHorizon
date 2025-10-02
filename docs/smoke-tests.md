@@ -45,19 +45,11 @@ Notes
 - If any container fails to become healthy, restart the stack after a short pause
 - For large-volume tests, prefer placing multiple files into `_data/inboxA` and observe throughput and backoff behavior in the logs
 
-## Orchestrated processor mode (optional)
+## Orchestrated processor (default)
 
-You can try the new orchestrated processor that routes files using `Routing` rules and writes to configured `Destinations`. This keeps the legacy processor as default; flip a feature flag to enable.
+The orchestrated processor routes files using `Routing` rules and writes to configured `Destinations`. It is enabled by default.
 
-Enable orchestrator
-
-- Set the feature flag in your environment (or appsettings):
-
-  - Environment variables
-
-    - `Features__EnableOrchestratedProcessor=true`
-
-  - Minimal Routing and Destinations via environment variables (examples):
+Configure minimal Routing and Destinations via environment variables (examples):
 
     - `Routing__Rules__0__Name=local-all`
     - `Routing__Rules__0__Protocol=local`
@@ -67,27 +59,28 @@ Enable orchestrator
     - `Destinations__Local__0__Name=OutboxA`
     - `Destinations__Local__0__RootPath=./_data/outboxA`
 
-  - Or appsettings snippet (Development):
+Or appsettings snippet (Development):
 
     ```json
     {
-      "Features": { "EnableOrchestratedProcessor": true },
-      "Routing": {
-        "Rules": [
-          {
-            "Name": "local-all",
-            "Protocol": "local",
-            "PathGlob": "**/*.*",
-            "Destinations": ["OutboxA"],
-            "Overwrite": true
-          }
-        ]
-      },
-      "Destinations": {
-        "Local": [{ "Name": "OutboxA", "RootPath": "./_data/outboxA" }]
-      }
-    }
-    ```
+
+// no feature flag required; orchestrator is default
+"Routing": {
+"Rules": [
+{
+"Name": "local-all",
+"Protocol": "local",
+"PathGlob": "\*_/_.\*",
+"Destinations": ["OutboxA"],
+"Overwrite": true
+}
+]
+},
+"Destinations": {
+"Local": [{ "Name": "OutboxA", "RootPath": "./_data/outboxA" }]
+}
+}
+```
 
 Verify end-to-end
 

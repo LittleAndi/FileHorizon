@@ -34,10 +34,9 @@ public class FileProcessingServiceOrchestratedFlowTests
         services.AddSingleton<IOptions<PipelineOptions>>(Options.Create(new PipelineOptions()));
         services.AddSingleton<IOptions<IdempotencyOptions>>(Options.Create(new IdempotencyOptions { Enabled = false }));
 
-        // Enable orchestrator
+        // Feature flags (orchestrator always enabled by default now)
         services.AddSingleton<IOptions<PipelineFeaturesOptions>>(Options.Create(new PipelineFeaturesOptions
         {
-            EnableOrchestratedProcessor = true,
             EnableLocalPoller = true
         }));
 

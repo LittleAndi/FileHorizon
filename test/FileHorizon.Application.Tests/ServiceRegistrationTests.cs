@@ -9,7 +9,7 @@ namespace FileHorizon.Application.Tests;
 
 public class ServiceRegistrationTests
 {
-    private static ServiceProvider BuildServiceProvider(bool enableOrchestrator)
+    private static ServiceProvider BuildServiceProvider()
     {
         var services = new ServiceCollection();
         // Minimal logging for DI
@@ -19,7 +19,6 @@ public class ServiceRegistrationTests
         // Override features to control processor selection
         services.AddSingleton<IOptions<PipelineFeaturesOptions>>(Options.Create(new PipelineFeaturesOptions
         {
-            EnableOrchestratedProcessor = enableOrchestrator,
             EnableLocalPoller = true
         }));
         // Provide required option types with defaults to satisfy other registrations
@@ -35,18 +34,12 @@ public class ServiceRegistrationTests
     }
 
     [Fact]
-    public void IFileProcessor_Should_Be_Orchestrator_When_Feature_Enabled()
+    public void IFileProcessor_Should_Be_Orchestrator_By_Default()
     {
-        using var sp = BuildServiceProvider(enableOrchestrator: true);
+        using var sp = BuildServiceProvider();
         var proc = sp.GetRequiredService<IFileProcessor>();
         Assert.IsType<FileProcessingOrchestrator>(proc);
     }
 
-    [Fact]
-    public void IFileProcessor_Should_Be_Legacy_When_Feature_Disabled()
-    {
-        using var sp = BuildServiceProvider(enableOrchestrator: false);
-        var proc = sp.GetRequiredService<IFileProcessor>();
-        Assert.IsType<LocalFileTransferProcessor>(proc);
-    }
+    // Legacy processor removed; orchestrator is the only implementation
 }
