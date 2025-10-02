@@ -67,12 +67,13 @@ File discovery is handled by protocol-specific pollers composed by a multi-proto
 
 Feature flags (section `Features`):
 
-| Flag                 | Default | Purpose                                                                                           |
-| -------------------- | ------- | ------------------------------------------------------------------------------------------------- |
-| `EnableLocalPoller`  | `true`  | Enable local/UNC directory polling sources configured under `FileSources` (legacy/local).         |
-| `EnableFtpPoller`    | `false` | Enable FTP remote sources listed in `RemoteFileSources:Sources`.                                  |
-| `EnableSftpPoller`   | `false` | Enable SFTP remote sources listed in `RemoteFileSources:Sources`.                                 |
-| `EnableFileTransfer` | `false` | Perform the actual transfer/move (side effects). When `false`, pipeline simulates discovery only. |
+| Flag                          | Default | Purpose                                                                                                                         |
+| ----------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `EnableLocalPoller`           | `true`  | Enable local/UNC directory polling sources configured under `FileSources` (legacy/local).                                       |
+| `EnableFtpPoller`             | `false` | Enable FTP remote sources listed in `RemoteFileSources:Sources`.                                                                |
+| `EnableSftpPoller`            | `false` | Enable SFTP remote sources listed in `RemoteFileSources:Sources`.                                                               |
+| `EnableFileTransfer`          | `false` | Perform the actual transfer/move (side effects). When `false`, pipeline simulates discovery only.                               |
+| `EnableOrchestratedProcessor` | `false` | Switch processing to the new orchestrated pipeline (router + protocol readers + sinks). When `false`, legacy processor is used. |
 
 Environment variable examples:
 
@@ -81,6 +82,7 @@ Features__EnableLocalPoller=true
 Features__EnableFtpPoller=false
 Features__EnableSftpPoller=true
 Features__EnableFileTransfer=true
+Features__EnableOrchestratedProcessor=true
 ```
 
 If all three poller flags are disabled the composite poller runs with an empty set (harmless no-op). This is useful for staging environments while only processing already enqueued events.
@@ -155,6 +157,91 @@ Files are only enqueued once their size remains stable for `MinStableSeconds`. A
 ### Backoff & Resilience
 
 Each remote source tracks consecutive failures. An exponential backoff (base 5s doubling up to 5 minutes) delays subsequent attempts after errors (connection, auth, listing). A single success resets the backoff window.
+
+---
+
+## Orchestrated Processing and Routing (New)
+
+When `Features__EnableOrchestratedProcessor=true`, FileHorizon uses a modular orchestrator that selects a protocol-specific reader, routes the file via rules, and writes to a destination sink. This mode unlocks multi-destination routing and clearer separation of concerns.
+
+Key pieces:
+
+- Readers: `local`, `sftp` (FTP reader pending). The orchestrator selects by `FileReference.Protocol`.
+- Router: Matches by protocol and path into a single destination (current implementation is 1:1).
+- Sinks: Currently local filesystem sink; remote sinks can be added later.
+- Idempotency: Prevents duplicate processing (in-memory or Redis-backed store).
+
+### Configuration: Destinations + Routing + Transfer
+
+Example `appsettings.json` excerpt:
+
+```json
+{
+  "Destinations": {
+    "Local": [
+      {
+        "Name": "OutboxA",
+        "BasePath": "/data/outboxA",
+        "Overwrite": true
+      }
+    ],
+    "Sftp": [
+      {
+        "Name": "PartnerX",
+        "Host": "sftp.partner.net",
+        "Port": 22,
+        "RemotePath": "/outbound",
+        "UsernameSecret": "secrets:sftp-user",
+        "PasswordSecret": "secrets:sftp-pass"
+      }
+    ]
+  },
+  "Routing": {
+    "Rules": [
+      {
+        "Match": {
+          "Protocol": "local",
+          "PathPattern": "^/data/inboxA/.+\\.txt$"
+        },
+        "Destination": "OutboxA"
+      }
+    ]
+  },
+  "Transfer": {
+    "ChunkSizeBytes": 32768,
+    "Idempotency": {
+      "Enabled": true,
+      "TtlSeconds": 86400
+    }
+  }
+}
+```
+
+Environment variable form (Windows PowerShell examples):
+
+```
+Features__EnableOrchestratedProcessor=true
+
+Destinations__Local__0__Name=OutboxA
+Destinations__Local__0__BasePath=/data/outboxA
+Destinations__Local__0__Overwrite=true
+
+Routing__Rules__0__Match__Protocol=local
+Routing__Rules__0__Match__PathPattern=^/data/inboxA/.+\.txt$
+Routing__Rules__0__Destination=OutboxA
+
+Transfer__ChunkSizeBytes=32768
+Transfer__Idempotency__Enabled=true
+Transfer__Idempotency__TtlSeconds=86400
+```
+
+Notes:
+
+- On Windows, paths are normalized internally; the router matches against a normalized forward-slash path.
+- If Redis is enabled (`Redis__Enabled=true`), the idempotency store uses Redis with TTL; otherwise an in-memory store is used.
+- Current sink support is local filesystem; remote sinks may be added in future.
+
+For a deeper overview see `docs/processing-architecture.md`.
 
 ---
 
@@ -357,15 +444,17 @@ FileHorizon ships with unified tracing, metrics, and structured logging via **Op
 
 ### What Is Collected
 
-- Traces: file processing spans (`file.process`), queue enqueue/dequeue spans (`queue.enqueue`, `queue.dequeue`), lifecycle span (`pipeline.lifetime`).
+- Traces: file processing spans (`file.process`, `file.orchestrate`), reader/sink spans (`reader.open`, `sink.write`), queue enqueue/dequeue spans (`queue.enqueue`, `queue.dequeue`), lifecycle span (`pipeline.lifetime`).
 - Metrics (Meter `FileHorizon`):
   - `files.processed` (counter)
   - `files.failed` (counter)
+  - `bytes.copied` (counter)
   - `queue.enqueued` (counter)
   - `queue.enqueue.failures` (counter)
   - `queue.dequeued` (counter)
   - `queue.dequeue.failures` (counter)
   - `processing.duration.ms` (histogram)
+  - `poll.cycle.duration.ms` (histogram)
 
 ### Prometheus Endpoint
 
@@ -447,6 +536,8 @@ Currently logs go through the OpenTelemetry logging provider. If an OTLP exporte
 | file.process            | `file.protocol`                 | `local`                   |
 | file.process            | `file.source_path`              | `/data/inbox/file1.txt`   |
 | file.process            | `file.size_bytes`               | `2048`                    |
+| reader.open             | `file.protocol`                 | `sftp`                    |
+| sink.write              | `sink.name`                     | `OutboxA`                 |
 | queue.enqueue / dequeue | `messaging.system`              | `redis`                   |
 | queue.enqueue / dequeue | `messaging.destination`         | `filehorizon:file-events` |
 | queue.dequeue           | `messaging.batch.message_count` | `10`                      |
