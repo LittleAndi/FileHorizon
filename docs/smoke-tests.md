@@ -44,3 +44,59 @@ Notes
 
 - If any container fails to become healthy, restart the stack after a short pause
 - For large-volume tests, prefer placing multiple files into `_data/inboxA` and observe throughput and backoff behavior in the logs
+
+## Orchestrated processor mode (optional)
+
+You can try the new orchestrated processor that routes files using `Routing` rules and writes to configured `Destinations`. This keeps the legacy processor as default; flip a feature flag to enable.
+
+Enable orchestrator
+
+- Set the feature flag in your environment (or appsettings):
+
+  - Environment variables
+
+    - `Features__EnableOrchestratedProcessor=true`
+
+  - Minimal Routing and Destinations via environment variables (examples):
+
+    - `Routing__Rules__0__Name=local-all`
+    - `Routing__Rules__0__Protocol=local`
+    - `Routing__Rules__0__PathGlob=**/*.*`
+    - `Routing__Rules__0__Destinations__0=OutboxA`
+    - `Routing__Rules__0__Overwrite=true`
+    - `Destinations__Local__0__Name=OutboxA`
+    - `Destinations__Local__0__RootPath=./_data/outboxA`
+
+  - Or appsettings snippet (Development):
+
+    ```json
+    {
+      "Features": { "EnableOrchestratedProcessor": true },
+      "Routing": {
+        "Rules": [
+          {
+            "Name": "local-all",
+            "Protocol": "local",
+            "PathGlob": "**/*.*",
+            "Destinations": ["OutboxA"],
+            "Overwrite": true
+          }
+        ]
+      },
+      "Destinations": {
+        "Local": [{ "Name": "OutboxA", "RootPath": "./_data/outboxA" }]
+      }
+    }
+    ```
+
+Verify end-to-end
+
+- With orchestrator enabled and rules configured:
+  - Place a file in `_data/inboxA` (e.g., `_data/inboxA/sample.txt`).
+  - Within a moment, confirm the file appears in `_data/outboxA`.
+  - Check logs for a `file.process` span and `file.orchestrate` activity; metrics counters will increment.
+
+Notes
+
+- Orchestrator currently uses the first matching destination only. Multi-destination writes will arrive later.
+- Paths in rules/globs are OS-dependent; Windows paths are normalized internally for glob matching.
