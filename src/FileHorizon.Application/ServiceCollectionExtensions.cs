@@ -18,6 +18,9 @@ public static class ServiceCollectionExtensions
         // Infrastructure defaults
         services.AddSingleton<Abstractions.IFileProcessor, Infrastructure.FileProcessing.LocalFileTransferProcessor>();
         services.AddSingleton<Abstractions.IFileEventValidator, Validation.BasicFileEventValidator>();
+        // Processing adapters (initial local-only)
+        services.AddSingleton<Abstractions.IFileContentReader, Infrastructure.Processing.LocalFileContentReader>();
+        services.AddSingleton<Abstractions.IFileSink, Infrastructure.Processing.LocalFileSink>();
 
         services.AddSingleton<Infrastructure.Polling.LocalDirectoryPoller>();
         services.AddSingleton<Abstractions.IFilePoller>(sp =>
