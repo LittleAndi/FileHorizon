@@ -96,6 +96,12 @@ public static class ServiceCollectionExtensions
         services.AddOptions<PipelineFeaturesOptions>();
         services.AddOptions<Configuration.RemoteFileSourcesOptions>();
         services.AddSingleton<IValidateOptions<Configuration.RemoteFileSourcesOptions>, Configuration.RemoteFileSourcesOptionsValidator>();
+        services.AddOptions<Configuration.DestinationsOptions>();
+        services.AddSingleton<IValidateOptions<Configuration.DestinationsOptions>, Configuration.DestinationsOptionsValidator>();
+        services.AddOptions<Configuration.RoutingOptions>();
+        services.AddSingleton<IValidateOptions<Configuration.RoutingOptions>, Configuration.RoutingOptionsValidator>();
+        services.AddOptions<Configuration.TransferOptions>();
+        services.AddSingleton<IValidateOptions<Configuration.TransferOptions>, Configuration.TransferOptionsValidator>();
 
         // Secret resolution (dev placeholder). Host layer can replace with Key Vault implementation.
         services.AddSingleton<Abstractions.ISecretResolver, Infrastructure.Secrets.InMemorySecretResolver>();
