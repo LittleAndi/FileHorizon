@@ -7,4 +7,5 @@ public sealed class PipelineFeaturesOptions
     public bool EnableLocalPoller { get; set; } = true;
     public bool EnableFtpPoller { get; set; } = false;
     public bool EnableSftpPoller { get; set; } = false;
+    public bool EnableOrchestratedProcessor { get; set; } = false;
 }

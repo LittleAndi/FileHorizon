@@ -16,11 +16,22 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Abstractions.IFileProcessingTelemetry, Infrastructure.Telemetry.FileProcessingTelemetry>();
         services.AddSingleton<Core.IFileProcessingService, Core.FileProcessingService>();
         // Infrastructure defaults
-        services.AddSingleton<Abstractions.IFileProcessor, Infrastructure.FileProcessing.LocalFileTransferProcessor>();
+        services.AddSingleton<Infrastructure.FileProcessing.LocalFileTransferProcessor>();
+        services.AddSingleton<Infrastructure.FileProcessing.FileProcessingOrchestrator>();
+        services.AddSingleton<Abstractions.IFileProcessor>(sp =>
+        {
+            var features = sp.GetRequiredService<IOptions<PipelineFeaturesOptions>>().Value;
+            if (features.EnableOrchestratedProcessor)
+            {
+                return sp.GetRequiredService<Infrastructure.FileProcessing.FileProcessingOrchestrator>();
+            }
+            return sp.GetRequiredService<Infrastructure.FileProcessing.LocalFileTransferProcessor>();
+        });
         services.AddSingleton<Abstractions.IFileEventValidator, Validation.BasicFileEventValidator>();
         // Processing adapters (initial local-only)
         services.AddSingleton<Abstractions.IFileContentReader, Infrastructure.Processing.LocalFileContentReader>();
         services.AddSingleton<Abstractions.IFileSink, Infrastructure.Processing.LocalFileSink>();
+        services.AddSingleton<Abstractions.IFileRouter, Infrastructure.Processing.SimpleFileRouter>();
 
         services.AddSingleton<Infrastructure.Polling.LocalDirectoryPoller>();
         services.AddSingleton<Abstractions.IFilePoller>(sp =>
