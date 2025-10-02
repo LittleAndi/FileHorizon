@@ -1,7 +1,10 @@
 using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Common;
+using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using System.Linq;
 
 namespace FileHorizon.Application.Infrastructure.Processing;
 
@@ -9,10 +12,32 @@ namespace FileHorizon.Application.Infrastructure.Processing;
 /// Minimal SFTP file content reader (stub). Uses ISftpClientFactory to open read streams and fetch attributes.
 /// For now, defaults to anonymous auth when credentials aren't provided. No network tests; use fakes.
 /// </summary>
-public sealed class SftpFileContentReader(ILogger<SftpFileContentReader> logger, ISftpClientFactory clientFactory) : IFileContentReader
+public sealed class SftpFileContentReader : IFileContentReader
 {
-    private readonly ILogger<SftpFileContentReader> _logger = logger;
-    private readonly ISftpClientFactory _factory = clientFactory;
+    private readonly ILogger<SftpFileContentReader> _logger;
+    private readonly ISftpClientFactory _factory;
+    private readonly IOptionsMonitor<RemoteFileSourcesOptions>? _remoteOptions;
+    private readonly ISecretResolver? _secretResolver;
+
+    // Test-friendly minimal constructor
+    public SftpFileContentReader(ILogger<SftpFileContentReader> logger, ISftpClientFactory clientFactory)
+    {
+        _logger = logger;
+        _factory = clientFactory;
+    }
+
+    // DI constructor: preferred in runtime
+    public SftpFileContentReader(
+        ILogger<SftpFileContentReader> logger,
+        ISftpClientFactory clientFactory,
+        IOptionsMonitor<RemoteFileSourcesOptions> remoteOptions,
+        ISecretResolver secretResolver)
+    {
+        _logger = logger;
+        _factory = clientFactory;
+        _remoteOptions = remoteOptions;
+        _secretResolver = secretResolver;
+    }
 
     public async Task<Result<FileAttributesInfo>> GetAttributesAsync(FileReference file, CancellationToken ct)
     {
@@ -24,7 +49,8 @@ public sealed class SftpFileContentReader(ILogger<SftpFileContentReader> logger,
         {
             return Result<FileAttributesInfo>.Failure(Error.Validation.Invalid("Invalid SFTP file reference; host/port/path missing"));
         }
-        await using var client = _factory.Create(host, port, username: "anonymous", password: null, privateKeyPem: null, privateKeyPassphrase: null);
+        var creds = await ResolveCredentialsAsync(file.SourceName, host, port, ct).ConfigureAwait(false);
+        await using var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase);
         try
         {
             await client.ConnectAsync(ct).ConfigureAwait(false);
@@ -48,7 +74,8 @@ public sealed class SftpFileContentReader(ILogger<SftpFileContentReader> logger,
         {
             return Result<Stream>.Failure(Error.Validation.Invalid("Invalid SFTP file reference; host/port/path missing"));
         }
-        await using var client = _factory.Create(host, port, username: "anonymous", password: null, privateKeyPem: null, privateKeyPassphrase: null);
+        var creds = await ResolveCredentialsAsync(file.SourceName, host, port, ct).ConfigureAwait(false);
+        await using var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase);
         try
         {
             await client.ConnectAsync(ct).ConfigureAwait(false);
@@ -62,6 +89,36 @@ public sealed class SftpFileContentReader(ILogger<SftpFileContentReader> logger,
             _logger.LogWarning(ex, "Failed to open SFTP stream: {Host}:{Port}{Path}", host, port, remotePath);
             return Result<Stream>.Failure(Error.Unspecified("Sftp.OpenReadFailed", ex.Message));
         }
+    }
+
+    private async Task<(string Username, string? Password, string? PrivateKeyPem, string? PrivateKeyPassphrase)>
+        ResolveCredentialsAsync(string? sourceName, string host, int port, CancellationToken ct)
+    {
+        // Defaults for backward compatibility in tests or if options not bound
+        if (_remoteOptions is null || _secretResolver is null)
+        {
+            return ("anonymous", null, null, null);
+        }
+
+        var current = _remoteOptions.CurrentValue;
+        var sftp = current.Sftp
+            .FirstOrDefault(s => !string.IsNullOrWhiteSpace(sourceName)
+                ? string.Equals(s.Name, sourceName, StringComparison.OrdinalIgnoreCase)
+                : (string.Equals(s.Host, host, StringComparison.OrdinalIgnoreCase) && s.Port == port));
+
+        if (sftp is null)
+        {
+            // No matching config; fall back to anonymous
+            _logger.LogDebug("No SFTP source matched for {Host}:{Port} (sourceName={SourceName}); using anonymous", host, port, sourceName);
+            return ("anonymous", null, null, null);
+        }
+
+        var username = string.IsNullOrWhiteSpace(sftp.Username) ? "anonymous" : sftp.Username!;
+        var password = await _secretResolver.ResolveSecretAsync(sftp.PasswordSecretRef, ct).ConfigureAwait(false);
+        var privateKeyPem = await _secretResolver.ResolveSecretAsync(sftp.PrivateKeySecretRef, ct).ConfigureAwait(false);
+        var privateKeyPass = await _secretResolver.ResolveSecretAsync(sftp.PrivateKeyPassphraseSecretRef, ct).ConfigureAwait(false);
+
+        return (username, password, privateKeyPem, privateKeyPass);
     }
 
     private static bool TryResolveEndpoint(FileReference file, out string host, out int port, out string path)

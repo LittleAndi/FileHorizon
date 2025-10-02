@@ -6,14 +6,9 @@ namespace FileHorizon.Application.Infrastructure.Polling;
 /// A readiness checker that ensures the file size and last write timestamp are unchanged for a configured stability window.
 /// The window is derived from source MinStableSeconds and enforced by caller passing the previous snapshot.
 /// </summary>
-public sealed class SizeStableReadinessChecker : IFileReadinessChecker
+public sealed class SizeStableReadinessChecker(TimeSpan stabilityWindow) : IFileReadinessChecker
 {
-    private readonly TimeSpan _stabilityWindow;
-
-    public SizeStableReadinessChecker(TimeSpan stabilityWindow)
-    {
-        _stabilityWindow = stabilityWindow < TimeSpan.Zero ? TimeSpan.Zero : stabilityWindow;
-    }
+    private readonly TimeSpan _stabilityWindow = stabilityWindow < TimeSpan.Zero ? TimeSpan.Zero : stabilityWindow;
 
     public Task<bool> IsReadyAsync(IRemoteFileInfo file, FileObservationSnapshot? previousSnapshot, CancellationToken ct)
     {

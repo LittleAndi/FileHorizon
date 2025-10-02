@@ -19,6 +19,8 @@ builder.Services.Configure<PipelineOptions>(builder.Configuration.GetSection("Pi
 // New orchestrator-related options (binding only for now)
 builder.Services.Configure<DestinationsOptions>(builder.Configuration.GetSection(DestinationsOptions.SectionName));
 builder.Services.Configure<RoutingOptions>(builder.Configuration.GetSection(RoutingOptions.SectionName));
+// Add this line to bind remote sources (FTP/SFTP)
+builder.Services.Configure<RemoteFileSourcesOptions>(builder.Configuration.GetSection(RemoteFileSourcesOptions.SectionName));
 builder.Services.Configure<TransferOptions>(builder.Configuration.GetSection(TransferOptions.SectionName));
 
 builder.Services.AddHealthChecks();

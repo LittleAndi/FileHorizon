@@ -8,18 +8,12 @@ using Microsoft.Extensions.Options;
 
 namespace FileHorizon.Application.Infrastructure.Polling;
 
-/// <summary>
-/// Base class encapsulating common remote polling workflow for FTP/SFTP sources.
-/// Responsibilities: iterate configured sources, connect, list files, track observation snapshots, apply readiness, enqueue events.
-/// Backoff and telemetry hooks are virtual for future enhancement.
-/// </summary>
 public abstract class RemotePollerBase : IFilePoller
 {
     private readonly IFileEventQueue _queue;
     private readonly ILogger _logger;
     private readonly IOptionsMonitor<RemoteFileSourcesOptions> _remoteOptions;
     private readonly ConcurrentDictionary<string, FileObservationSnapshot> _observations = new();
-    // Tracks last dispatched (size, mtime) per identity to suppress duplicate events across cycles
     private readonly ConcurrentDictionary<string, (long Size, DateTimeOffset MTime)> _dispatched = new();
     private readonly ConcurrentDictionary<string, BackoffState> _backoff = new();
     private readonly TimeSpan _baseBackoff = TimeSpan.FromSeconds(5);
@@ -43,39 +37,50 @@ public abstract class RemotePollerBase : IFilePoller
         var cycleStart = DateTimeOffset.UtcNow;
         using var cycleActivity = Common.Telemetry.TelemetryInstrumentation.ActivitySource.StartActivity("poll.remote.cycle", System.Diagnostics.ActivityKind.Internal);
         var sources = GetEnabledSources();
+
+        // NEW: cycle start log
+        _logger.LogTrace("Remote poll cycle start. sources={Count}", sources.Count);
+
         if (sources.Count == 0)
         {
             cycleActivity?.SetTag("sources.count", 0);
+            _logger.LogTrace("No enabled remote sources; skipping remote poll cycle.");
             return Result.Success();
         }
+
         cycleActivity?.SetTag("sources.count", sources.Count);
         Common.Telemetry.TelemetryInstrumentation.PollCycles.Add(1);
+
         foreach (var src in sources)
         {
-            if (ct.IsCancellationRequested) break;
-            if (IsSourceInBackoff(src.Name, out var remaining))
-            {
-                _logger.LogTrace("Skipping source {Source} due to backoff (remaining {RemainingMs}ms)", src.Name, (int)remaining.TotalMilliseconds);
-                continue;
-            }
-            try
-            {
-                await PollSourceAsync(src, ct).ConfigureAwait(false);
-                ResetBackoff(src.Name);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            if (ct.IsCancellationRequested)
             {
                 break;
             }
-            catch (Exception ex)
+
+            if (IsSourceInBackoff(src.Name, out var remaining))
             {
-                _logger.LogWarning(ex, "Poll of remote source {SourceName} failed", src.Name);
-                Common.Telemetry.TelemetryInstrumentation.PollSourceErrors.Add(1, KeyValuePair.Create<string, object?>("poll.source", src.Name));
-                RegisterFailure(src.Name);
+                // NEW: backoff log
+                _logger.LogTrace("Skipping source {Source} due to backoff. remainingSeconds={RemainingSeconds}", src.Name, (int)remaining.TotalSeconds);
+                continue;
             }
+
+            // NEW: per-source poll log
+            _logger.LogDebug("Polling remote source {Name} host={Host} port={Port} path={RemotePath} recursive={Recursive} pattern={Pattern}",
+                src.Name, src.Host, src.Port, src.RemotePath, src.Recursive, src.Pattern);
+
+            await PollSourceAsync(src, ct).ConfigureAwait(false);
+
+            // NEW: per-source completion log
+            _logger.LogTrace("Completed poll for source {Name}", src.Name);
         }
+
         var elapsed = (DateTimeOffset.UtcNow - cycleStart).TotalMilliseconds;
         Common.Telemetry.TelemetryInstrumentation.PollCycleDurationMs.Record(elapsed);
+
+        // NEW: cycle end log
+        _logger.LogTrace("Remote poll cycle end. elapsedMs={ElapsedMs}", elapsed);
+
         return Result.Success();
     }
 
@@ -83,6 +88,11 @@ public abstract class RemotePollerBase : IFilePoller
     {
         using var sourceActivity = Common.Telemetry.TelemetryInstrumentation.ActivitySource.StartActivity("poll.remote.source", System.Diagnostics.ActivityKind.Internal);
         sourceActivity?.SetTag("poll.source", source.Name);
+
+        // NEW: listing start log
+        _logger.LogTrace("Listing files from source {Name} path={Path} recursive={Recursive} pattern={Pattern}",
+            source.Name, source.RemotePath, source.Recursive, source.Pattern);
+
         await using var client = CreateClient(source);
         try
         {
@@ -97,9 +107,17 @@ public abstract class RemotePollerBase : IFilePoller
 
         var readiness = new SizeStableReadinessChecker(TimeSpan.FromSeconds(Math.Max(0, source.MinStableSeconds)));
 
+        var seen = 0; // NEW: simple visibility counter
+
         await foreach (var file in client.ListFilesAsync(source.RemotePath, source.Recursive, source.Pattern, ct).ConfigureAwait(false))
         {
-            if (ct.IsCancellationRequested) break;
+            seen++;
+
+            if (ct.IsCancellationRequested)
+            {
+                break;
+            }
+
             if (file.IsDirectory) continue; // safety
             var key = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
             var previous = _observations.TryGetValue(key, out var snap) ? snap : null;
@@ -121,6 +139,9 @@ public abstract class RemotePollerBase : IFilePoller
             await EnqueueEventAsync(source, client, file, key, ct).ConfigureAwait(false);
             _dispatched[key] = (newSnap.Size, newSnap.LastWriteTimeUtc);
         }
+
+        // NEW: listing completion log
+        _logger.LogDebug("Completed listing for source {Name}. itemsSeen={Seen}", source.Name, seen);
     }
 
     private async Task EnqueueEventAsync(IRemoteFileSourceDescriptor source, IRemoteFileClient client, IRemoteFileInfo file, string identityKey, CancellationToken ct)
@@ -163,7 +184,6 @@ public abstract class RemotePollerBase : IFilePoller
         bool Recursive { get; }
         int MinStableSeconds { get; }
         string? DestinationPath { get; }
-        // credential material already resolved; secret refs are not exposed here
         string Host { get; }
         int Port { get; }
     }

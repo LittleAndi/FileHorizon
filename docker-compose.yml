@@ -26,21 +26,19 @@ services:
       dockerfile: Dockerfile
     environment:
       - LOG_CONSOLE_DEV=true
-      - Logging__LogLevel__Default=Information
-      - Logging__LogLevel__Microsoft=Warning
-      - Logging__LogLevel__Microsoft.Hosting.Lifetime=Information
-      - Logging__LogLevel__FileHorizon=Debug
-      # Role + feature flags
+      - Logging__LogLevel__Default=Debug
+      - Logging__LogLevel__Microsoft=Information
+      - Logging__LogLevel__FileHorizon=Trace
       - Pipeline__Role=Poller
       - Features__EnableFileTransfer=false
       - Features__EnableLocalPoller=true
       - Features__EnableFtpPoller=false
-      - Features__EnableSftpPoller=false
+      - Features__EnableSftpPoller=true
       # Remote SFTP source (index 0 in RemoteFileSources.Sftp)
       - RemoteFileSources__Sftp__0__Name=PartnerSftp
       - RemoteFileSources__Sftp__0__Host=sftp
       - RemoteFileSources__Sftp__0__Port=22
-      - RemoteFileSources__Sftp__0__RemotePath=/home/demo/upload
+      - RemoteFileSources__Sftp__0__RemotePath=/upload
       - RemoteFileSources__Sftp__0__Username=demo
       - RemoteFileSources__Sftp__0__PasswordSecretRef=SFTP_PASS
       - RemoteFileSources__Sftp__0__MinStableSeconds=5
@@ -92,6 +90,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      sftp:
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
@@ -136,18 +136,26 @@ services:
       - FileSources__Sources__1__DestinationPath=/data/outboxB
       - FileSources__Sources__1__CreateDestinationDirectories=true
       # Destination C available for remote SFTP processed files
-    # --- Orchestrated processing (optional) ---
-    # To enable the new orchestrated pipeline (router + protocol readers + sinks), uncomment below.
-    # Keep legacy FileSources above for default behavior; these settings are safe to leave commented.
-    # - Destinations__Local__0__Name=OutboxA
-    # - Destinations__Local__0__BasePath=/data/outboxA
-    # - Destinations__Local__0__Overwrite=true
-    # - Routing__Rules__0__Match__Protocol=local
-    # - Routing__Rules__0__Match__PathPattern=^/data/inboxA/.+\\.txt$
-    # - Routing__Rules__0__Destination=OutboxA
-    # - Transfer__ChunkSizeBytes=32768
-    # - Transfer__Idempotency__Enabled=true
-    # - Transfer__Idempotency__TtlSeconds=86400
+      # --- Orchestrated processing (optional) ---
+      # To enable the new orchestrated pipeline (router + protocol readers + sinks), uncomment below.
+      # Keep legacy FileSources above for default behavior; these settings are safe to leave commented.
+      # - Destinations__Local__0__Name=OutboxA
+      # - Destinations__Local__0__BasePath=/data/outboxA
+      # - Destinations__Local__0__Overwrite=true
+      # - Routing__Rules__0__Match__Protocol=local
+      # - Routing__Rules__0__Match__PathPattern=^/data/inboxA/.+\\.txt$
+      # - Routing__Rules__0__Destination=OutboxA
+      # - Transfer__ChunkSizeBytes=32768
+      # - Transfer__Idempotency__Enabled=true
+      # - Transfer__Idempotency__TtlSeconds=86400
+      # Orchestrated routing to local OutboxC for any SFTP file
+      - Destinations__Local__0__Name=OutboxC
+      - Destinations__Local__0__RootPath=/data/outboxC
+      - Routing__Rules__0__Name=sftp-all
+      - Routing__Rules__0__Protocol=sftp
+      - Routing__Rules__0__PathGlob=**/*.*
+      - Routing__Rules__0__Destinations__0=OutboxC
+      - Routing__Rules__0__Overwrite=true
     deploy:
       replicas: 3
     volumes:
@@ -176,6 +184,8 @@ services:
       poller:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      sftp:
         condition: service_healthy
     restart: unless-stopped
 

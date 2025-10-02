@@ -16,6 +16,7 @@ public sealed class SftpPoller(IFileEventQueue queue,
     private readonly ILoggerFactory _loggerFactory = loggerFactory;
     private readonly IOptionsMonitor<RemoteFileSourcesOptions> _remoteOptions = remoteOptions;
     private readonly FileHorizon.Application.Abstractions.ISecretResolver _secretResolver = secretResolver;
+    private readonly ILogger<SftpPoller> _logger = logger;
 
     protected override List<IRemoteFileSourceDescriptor> GetEnabledSources()
     {
@@ -46,6 +47,9 @@ public sealed class SftpPoller(IFileEventQueue queue,
                 passphrase = _secretResolver.ResolveSecretAsync(s.PrivateKeyPassphraseSecretRef).GetAwaiter().GetResult();
             }
         }
+
+        _logger.LogTrace("Creating SFTP client for {Host}:{Port} user={User}", s.Host, s.Port, s.Username ?? string.Empty);
+
         return new SftpRemoteFileClient(
             _loggerFactory.CreateLogger<SftpRemoteFileClient>(),
             s.Host,

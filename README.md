@@ -220,8 +220,6 @@ Example `appsettings.json` excerpt:
 Environment variable form (Windows PowerShell examples):
 
 ```
-Features__EnableOrchestratedProcessor=true
-
 Destinations__Local__0__Name=OutboxA
 Destinations__Local__0__BasePath=/data/outboxA
 Destinations__Local__0__Overwrite=true
