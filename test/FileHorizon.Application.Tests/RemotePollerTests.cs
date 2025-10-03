@@ -35,6 +35,7 @@ public class RemotePollerTests
         public async IAsyncEnumerable<IRemoteFileInfo> ListFilesAsync(string remotePath, bool recursive, string pattern, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
         { foreach (var f in _files) { yield return new FakeRemoteFileInfo(f.FullPath, f.Size, f.LastWrite, f.IsDir); await Task.Yield(); } }
         public Task<IRemoteFileInfo?> GetFileInfoAsync(string path, CancellationToken ct) => Task.FromResult<IRemoteFileInfo?>(null); // not used
+        public Task DeleteAsync(string fullPath, CancellationToken ct) => Task.CompletedTask; // deletion not exercised in these tests
     }
 
     private sealed class TestQueue : IFileEventQueue
@@ -60,7 +61,17 @@ public class RemotePollerTests
         protected override IRemoteFileClient CreateClient(IRemoteFileSourceDescriptor source) => _clientFactory(source);
         protected override ProtocolType MapProtocolType(ProtocolType protocol) => protocol; // identity mapping
         private sealed class Src(string name, string path, string pattern, bool rec, int stable, string? dest, string host, int port) : IRemoteFileSourceDescriptor
-        { public string Name => name; public string RemotePath => path; public string Pattern => pattern; public bool Recursive => rec; public int MinStableSeconds => stable; public string? DestinationPath => dest; public string Host => host; public int Port => port; }
+        {
+            public string Name => name;
+            public string RemotePath => path;
+            public string Pattern => pattern;
+            public bool Recursive => rec;
+            public int MinStableSeconds => stable;
+            public string? DestinationPath => dest;
+            public string Host => host;
+            public int Port => port;
+            public bool DeleteAfterTransfer => false; // tests default: no deletion
+        }
     }
 
     private static OptionsMonitorStub<RemoteFileSourcesOptions> CreateOptions(params FtpSourceOptions[] ftp)

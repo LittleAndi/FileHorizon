@@ -8,6 +8,6 @@ internal static class FileEventBuilder
     {
         var fi = new FileInfo(path);
         var meta = new FileMetadata(fi.FullName, fi.Length, fi.LastWriteTimeUtc, "none", null);
-        return new FileEvent(Guid.NewGuid().ToString("N"), meta, DateTimeOffset.UtcNow, "local", fi.FullName);
+        return new FileEvent(Guid.NewGuid().ToString("N"), meta, DateTimeOffset.UtcNow, "local", fi.FullName, false);
     }
 }

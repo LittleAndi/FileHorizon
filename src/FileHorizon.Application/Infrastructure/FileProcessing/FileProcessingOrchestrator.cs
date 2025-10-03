@@ -131,8 +131,8 @@ public sealed class FileProcessingOrchestrator(
         {
             return write; // propagate
         }
-        // Remote deletion (SFTP/FTP) if configured
-        await TryDeleteRemoteAfterSuccessAsync(fileEvent, ct).ConfigureAwait(false);
+        // Source deletion (local or remote) if event requests it
+        await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
         return Result.Success();
     }
 
@@ -155,11 +155,30 @@ public sealed class FileProcessingOrchestrator(
         return d?.RootPath;
     }
 
-    private async Task TryDeleteRemoteAfterSuccessAsync(FileEvent fileEvent, CancellationToken ct)
+    private async Task DeleteSourceIfRequestedAsync(FileEvent fileEvent, CancellationToken ct)
     {
-        if (fileEvent.Protocol is null) return;
-        var protocol = fileEvent.Protocol.ToLowerInvariant();
-        if (protocol is not ("sftp" or "ftp")) return;
+        if (!fileEvent.DeleteAfterTransfer) return; // event not requesting deletion
+        var protocol = fileEvent.Protocol?.ToLowerInvariant();
+        if (protocol == "local")
+        {
+            var path = fileEvent.Metadata.SourcePath;
+            try
+            {
+                if (System.IO.File.Exists(path))
+                {
+                    System.IO.File.Delete(path);
+                    _logger.LogDebug("Deleted local source file {Path}", path);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed deleting local source file {Path}", path);
+            }
+            return;
+        }
+
+        if (protocol is not ("sftp" or "ftp")) return; // no deletion for other protocols yet
+
         var sourcePath = fileEvent.Metadata.SourcePath;
         if (string.IsNullOrWhiteSpace(sourcePath)) return;
         if (!Uri.TryCreate(sourcePath, UriKind.Absolute, out var uri)) return;
@@ -171,15 +190,13 @@ public sealed class FileProcessingOrchestrator(
         }
         var remotePath = uri.AbsolutePath;
 
-        // Match source config (by name not available in identity key currently, so fallback to host/port/path prefix)
         if (protocol == "sftp")
         {
             var src = _remoteSources.CurrentValue.Sftp.FirstOrDefault(s => s.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && s.Port == port && remotePath.StartsWith(s.RemotePath, StringComparison.OrdinalIgnoreCase));
-            if (src is null || !src.DeleteAfterTransfer) return;
+            if (src is null) return; // cannot resolve credentials
             try
             {
                 var password = await _secretResolver.ResolveSecretAsync(src.PasswordSecretRef, ct).ConfigureAwait(false);
-                // Use our abstraction for deletion (ensures DeleteAsync implemented uniformly)
                 await using var client = new Infrastructure.Remote.SftpRemoteFileClient(
                     logger: sftpClientLogger,
                     host: src.Host,
@@ -198,10 +215,9 @@ public sealed class FileProcessingOrchestrator(
         else if (protocol == "ftp")
         {
             var src = _remoteSources.CurrentValue.Ftp.FirstOrDefault(s => s.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && s.Port == port && remotePath.StartsWith(s.RemotePath, StringComparison.OrdinalIgnoreCase));
-            if (src is null || !src.DeleteAfterTransfer) return;
+            if (src is null) return;
             try
             {
-                // Inline create FTP client (no factory abstraction yet)
                 var password = await _secretResolver.ResolveSecretAsync(src.PasswordSecretRef, ct).ConfigureAwait(false);
                 var ftpClient = new Infrastructure.Remote.FtpRemoteFileClient(
                     logger: ftpClientLogger,

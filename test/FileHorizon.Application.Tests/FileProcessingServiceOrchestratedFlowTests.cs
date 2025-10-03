@@ -77,7 +77,8 @@ public class FileProcessingServiceOrchestratedFlowTests
             Metadata: new FileMetadata(srcFile, new FileInfo(srcFile).Length, DateTimeOffset.UtcNow, "none", null),
             DiscoveredAtUtc: DateTimeOffset.UtcNow,
             Protocol: "local",
-            DestinationPath: string.Empty);
+            DestinationPath: string.Empty,
+            DeleteAfterTransfer: false);
 
         // Act
         var result = await svc.HandleAsync(ev, CancellationToken.None);

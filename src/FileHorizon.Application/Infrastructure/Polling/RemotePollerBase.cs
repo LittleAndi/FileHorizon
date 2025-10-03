@@ -219,7 +219,8 @@ public abstract class RemotePollerBase : IFilePoller
             Metadata: metadata,
             DiscoveredAtUtc: DateTimeOffset.UtcNow,
             Protocol: client.Protocol.ToString().ToLowerInvariant(),
-            DestinationPath: destination);
+            DestinationPath: destination,
+            DeleteAfterTransfer: source.DeleteAfterTransfer);
         var result = await _queue.EnqueueAsync(ev, ct).ConfigureAwait(false);
         if (!result.IsSuccess)
         {

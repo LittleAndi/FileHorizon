@@ -171,6 +171,36 @@ Key pieces:
 - Sinks: Currently local filesystem sink; remote sinks can be added later.
 - Idempotency: Prevents duplicate processing (in-memory or Redis-backed store).
 
+### Source File Deletion (Event-Driven)
+
+File deletion after a successful transfer is now controlled directly by each `FileEvent` through the `DeleteAfterTransfer` flag. This removes hidden, config-only coupling in the orchestrator and makes behavior explicit and testable.
+
+How the flag is populated:
+
+| Source Type                   | Config Flag           | Event Field           | Behavior                                                                                                       |
+| ----------------------------- | --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Local (FileSources)           | `DeleteAfterTransfer` | `DeleteAfterTransfer` | When `true`, the original source file is deleted after it has been successfully written to its destination(s). |
+| SFTP (RemoteFileSources:Sftp) | `DeleteAfterTransfer` | `DeleteAfterTransfer` | Remote file removed via SFTP client after successful sink write.                                               |
+| FTP (RemoteFileSources:Ftp)   | `DeleteAfterTransfer` | `DeleteAfterTransfer` | Remote file removed via FTP client after successful sink write.                                                |
+
+Notes:
+
+- If a remote deletion fails (e.g., transient network error), the failure is logged at `Warning` level but processing still succeeds (idempotent by design — file may be re-polled if still present unless already deleted server-side later).
+- Local deletions are attempted only if the file still exists; a missing file (e.g., manual cleanup) does not cause failure.
+- The Redis-backed queue persists the flag (`deleteAfterTransfer` field) so horizontally scaled workers will honor the intent identically.
+- This design allows future protocols (e.g., Cloud object storage) to simply project their own deletion flag into the event without additional orchestrator changes.
+
+Example environment variables:
+
+```
+FileSources__Sources__0__DeleteAfterTransfer=true
+
+# Remote SFTP delete after transfer
+RemoteFileSources__Sftp__0__DeleteAfterTransfer=true
+```
+
+If neither flag is set (`false` / omitted), no deletion occurs; files remain at the source.
+
 ### Configuration: Destinations + Routing + Transfer
 
 Example `appsettings.json` excerpt:

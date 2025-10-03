@@ -32,7 +32,8 @@ public class FileProcessingOrchestratorTests
             Metadata: new FileMetadata(srcFile, new FileInfo(srcFile).Length, DateTimeOffset.UtcNow, "none", null),
             DiscoveredAtUtc: DateTimeOffset.UtcNow,
             Protocol: "local",
-            DestinationPath: string.Empty);
+            DestinationPath: string.Empty,
+            DeleteAfterTransfer: false);
 
         var routing = new RoutingOptions
         {
@@ -60,13 +61,19 @@ public class FileProcessingOrchestratorTests
                 new LocalDestinationOptions { Name = "OutboxA", RootPath = destRoot }
             ]
         };
+        var remoteSources = new RemoteFileSourcesOptions();
         var orchestrator = new FileProcessingOrchestrator(
             router,
             readers,
             sinks,
             new StaticOptionsMonitor<DestinationsOptions>(destinations),
             new StaticOptionsMonitor<IdempotencyOptions>(new IdempotencyOptions { Enabled = false }),
+            new StaticOptionsMonitor<RemoteFileSourcesOptions>(remoteSources),
             new Infrastructure.Idempotency.InMemoryIdempotencyStore(),
+            new Infrastructure.Remote.SshNetSftpClientFactory(NullLogger<Infrastructure.Remote.SshNetSftpClientFactory>.Instance),
+            new Infrastructure.Secrets.InMemorySecretResolver(NullLogger<Infrastructure.Secrets.InMemorySecretResolver>.Instance),
+            NullLogger<Infrastructure.Remote.SftpRemoteFileClient>.Instance,
+            NullLogger<Infrastructure.Remote.FtpRemoteFileClient>.Instance,
             NullLogger<FileProcessingOrchestrator>.Instance);
 
         var res = await orchestrator.ProcessAsync(ev, CancellationToken.None);

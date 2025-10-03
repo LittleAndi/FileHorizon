@@ -42,6 +42,7 @@ services:
       - RemoteFileSources__Sftp__0__Username=demo
       - RemoteFileSources__Sftp__0__PasswordSecretRef=SFTP_PASS
       - RemoteFileSources__Sftp__0__MinStableSeconds=5
+      - RemoteFileSources__Sftp__0__DeleteAfterTransfer=true
       - RemoteFileSources__Sftp__0__DestinationPath=/data/outboxC
       # Dev secret values consumed by InMemorySecretResolver (simple env lookup)
       - SFTP_PASS=password
@@ -63,6 +64,8 @@ services:
       - FileSources__Sources__1__Pattern=*.*
       - FileSources__Sources__1__Recursive=true
       - FileSources__Sources__1__DestinationPath=/data/outboxB
+      # Delete local source B after processing
+      - FileSources__Sources__1__DeleteAfterTransfer=true
     ports:
       - "8080:8080" # only this one is published
     volumes:
@@ -119,8 +122,8 @@ services:
       - RemoteFileSources__Sftp__0__PasswordSecretRef=SFTP_PASS
       - RemoteFileSources__Sftp__0__Pattern=*.* # or * if you want extension‑less files
       - RemoteFileSources__Sftp__0__MinStableSeconds=5
-      - RemoteFileSources__Sftp__0__DeleteAfterTransfer=true
       - RemoteFileSources__Sftp__0__Enabled=true
+      # Above flag sets FileEvent.DeleteAfterTransfer for remote files (event-driven deletion)
       # Share secret
       - SFTP_PASS=password
       # Enable Redis queue
@@ -135,14 +138,12 @@ services:
       - FileSources__Sources__0__Path=/data/inboxA
       - FileSources__Sources__0__Pattern=*.*
       - FileSources__Sources__0__Recursive=true
-      - FileSources__Sources__0__MoveAfterProcessing=true
       - FileSources__Sources__0__DestinationPath=/data/outboxA
       - FileSources__Sources__0__CreateDestinationDirectories=true
       - FileSources__Sources__1__Name=InboxB
       - FileSources__Sources__1__Path=/data/inboxB
       - FileSources__Sources__1__Pattern=*.*
       - FileSources__Sources__1__Recursive=true
-      - FileSources__Sources__1__MoveAfterProcessing=true
       - FileSources__Sources__1__DestinationPath=/data/outboxB
       - FileSources__Sources__1__CreateDestinationDirectories=true
       # Destination C available for remote SFTP processed files

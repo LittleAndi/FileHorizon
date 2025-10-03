@@ -11,7 +11,7 @@ public class SimpleFileRouterTests
     private static FileEvent MakeEvent(string protocol, string path)
     {
         var meta = new FileMetadata(path, 0, DateTimeOffset.UtcNow, "none", null);
-        return new FileEvent(Guid.NewGuid().ToString("N"), meta, DateTimeOffset.UtcNow, protocol, "/dest");
+        return new FileEvent(Guid.NewGuid().ToString("N"), meta, DateTimeOffset.UtcNow, protocol, "/dest", false);
     }
 
     private static IOptionsMonitor<RoutingOptions> Options(params RoutingRuleOptions[] rules)

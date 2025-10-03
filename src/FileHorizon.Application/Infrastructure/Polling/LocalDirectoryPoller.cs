@@ -131,7 +131,8 @@ public sealed class LocalDirectoryPoller : IFilePoller
             Metadata: metadata,
             DiscoveredAtUtc: DateTimeOffset.UtcNow,
             Protocol: "local",
-            DestinationPath: fi.FullName
+            DestinationPath: fi.FullName,
+            DeleteAfterTransfer: source.DeleteAfterTransfer
         );
 
         var enqueueResult = await _queue.EnqueueAsync(ev, token).ConfigureAwait(false);
