@@ -68,6 +68,16 @@
           "OpenTelemetry.Api": "[1.12.0, 2.0.0)"
         }
       },
+      "BouncyCastle.Cryptography": {
+        "type": "Transitive",
+        "resolved": "2.5.1",
+        "contentHash": "zy8TMeTP+1FH2NrLaNZtdRbBdq7u5MI+NFZQOBSM69u5RFkciinwzV2eveY6Kjf5MzgsYvvl6kTStsj3JrXqkg=="
+      },
+      "FluentFTP": {
+        "type": "Transitive",
+        "resolved": "53.0.1",
+        "contentHash": "GzT+G6CsMQx+UeLiYmWsXUDDQpKIzo6NML21vgbZv7zyRFNx386eabGiuv3xkdCqxiTFYY4mGla9WdOLR1HAMA=="
+      },
       "Microsoft.Extensions.Configuration": {
         "type": "Transitive",
         "resolved": "9.0.0",
@@ -231,6 +241,15 @@
           "System.IO.Pipelines": "5.0.1"
         }
       },
+      "SSH.NET": {
+        "type": "Transitive",
+        "resolved": "2025.0.0",
+        "contentHash": "AKYbB+q2zFkNQbBFx5gXdv+Wje0baBtADQ35WnMKi4bg1ka74wTQtWoPd+fOWcydohdfsD0nfT8ErMOAPxtSfA==",
+        "dependencies": {
+          "BouncyCastle.Cryptography": "2.5.1",
+          "Microsoft.Extensions.Logging.Abstractions": "8.0.3"
+        }
+      },
       "StackExchange.Redis": {
         "type": "Transitive",
         "resolved": "2.9.17",
@@ -253,6 +272,8 @@
       "filehorizon.application": {
         "type": "Project",
         "dependencies": {
+          "FluentFTP": "[53.0.1, )",
+          "SSH.NET": "[2025.0.0, )",
           "StackExchange.Redis": "[2.9.17, )"
         }
       }

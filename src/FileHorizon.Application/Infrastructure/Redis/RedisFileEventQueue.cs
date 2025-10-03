@@ -103,7 +103,8 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
             new("checksum", fileEvent.Metadata.Checksum ?? string.Empty),
             new("discoveredAtUtc", fileEvent.DiscoveredAtUtc.ToUnixTimeMilliseconds()),
             new("protocol", fileEvent.Protocol),
-            new("destinationPath", fileEvent.DestinationPath)
+            new("destinationPath", fileEvent.DestinationPath),
+            new("deleteAfterTransfer", fileEvent.DeleteAfterTransfer ? "1" : "0")
         };
 
         try
@@ -239,13 +240,15 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
             var discoveredAtMsStr = dict.GetValueOrDefault("discoveredAtUtc") ?? "0";
             var protocol = dict.GetValueOrDefault("protocol") ?? string.Empty;
             var destinationPath = dict.GetValueOrDefault("destinationPath") ?? string.Empty;
+            var deleteAfterTransferStr = dict.GetValueOrDefault("deleteAfterTransfer") ?? "0";
 
             if (!long.TryParse(sizeBytesStr, out var sizeBytes)) return null;
             if (!long.TryParse(lastModifiedMsStr, out var lastModifiedMs)) return null;
             if (!long.TryParse(discoveredAtMsStr, out var discoveredAtMs)) return null;
 
             var metadata = new FileMetadata(sourcePath, sizeBytes, DateTimeOffset.FromUnixTimeMilliseconds(lastModifiedMs), hashAlgorithm, checksum);
-            return new FileEvent(id, metadata, DateTimeOffset.FromUnixTimeMilliseconds(discoveredAtMs), protocol, destinationPath);
+            var deleteAfter = deleteAfterTransferStr == "1" || deleteAfterTransferStr.Equals("true", StringComparison.OrdinalIgnoreCase);
+            return new FileEvent(id, metadata, DateTimeOffset.FromUnixTimeMilliseconds(discoveredAtMs), protocol, destinationPath, deleteAfter);
         }
         catch
         {

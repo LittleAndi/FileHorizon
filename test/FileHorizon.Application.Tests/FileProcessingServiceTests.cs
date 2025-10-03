@@ -37,7 +37,8 @@ public class FileProcessingServiceTests
             Metadata: new FileMetadata("/tmp/a.txt", 123, DateTimeOffset.UtcNow, "sha256", null),
             DiscoveredAtUtc: DateTimeOffset.UtcNow,
             Protocol: "local",
-            DestinationPath: "/dest/a.txt");
+            DestinationPath: "/dest/a.txt",
+            DeleteAfterTransfer: false);
 
         var expected = Result.Success();
         var testProcessor = new TestFileProcessor((fe, ct) => Task.FromResult(expected));

@@ -110,7 +110,7 @@ public sealed class LocalDirectoryPoller : IFilePoller
             return;
         }
 
-        var key = fi.FullName;
+        var key = ProtocolIdentity.BuildKey(ProtocolType.Local, string.Empty, 0, fi.FullName);
         var discovered = new DateTimeOffset(lastWrite, TimeSpan.Zero);
         if (_seenFiles.TryGetValue(key, out var prev) && prev >= discovered)
         {
@@ -120,7 +120,7 @@ public sealed class LocalDirectoryPoller : IFilePoller
         _seenFiles[key] = discovered; // snapshot early
 
         var metadata = new FileMetadata(
-            SourcePath: fi.FullName,
+            SourcePath: key,
             SizeBytes: fi.Length,
             LastModifiedUtc: lastWrite,
             HashAlgorithm: "none",
@@ -131,7 +131,8 @@ public sealed class LocalDirectoryPoller : IFilePoller
             Metadata: metadata,
             DiscoveredAtUtc: DateTimeOffset.UtcNow,
             Protocol: "local",
-            DestinationPath: fi.FullName
+            DestinationPath: fi.FullName,
+            DeleteAfterTransfer: source.DeleteAfterTransfer
         );
 
         var enqueueResult = await _queue.EnqueueAsync(ev, token).ConfigureAwait(false);

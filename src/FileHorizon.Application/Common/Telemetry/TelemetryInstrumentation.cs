@@ -14,11 +14,17 @@ public static class TelemetryInstrumentation
     // Counters
     public static readonly Counter<long> FilesProcessed = Meter.CreateCounter<long>("files.processed", description: "Number of files successfully processed");
     public static readonly Counter<long> FilesFailed = Meter.CreateCounter<long>("files.failed", description: "Number of files that failed processing");
+    public static readonly Counter<long> BytesCopied = Meter.CreateCounter<long>("bytes.copied", unit: "bytes", description: "Total bytes copied by sinks");
     public static readonly Counter<long> QueueEnqueued = Meter.CreateCounter<long>("queue.enqueued", description: "Number of file events enqueued");
     public static readonly Counter<long> QueueDequeued = Meter.CreateCounter<long>("queue.dequeued", description: "Number of file events dequeued");
     public static readonly Counter<long> QueueEnqueueFailures = Meter.CreateCounter<long>("queue.enqueue.failures", description: "Number of failed enqueue attempts");
     public static readonly Counter<long> QueueDequeueFailures = Meter.CreateCounter<long>("queue.dequeue.failures", description: "Number of dequeue attempts that resulted in errors");
+    public static readonly Counter<long> PollCycles = Meter.CreateCounter<long>("poll.cycles", description: "Number of poll cycles executed");
+    public static readonly Counter<long> PollSourceErrors = Meter.CreateCounter<long>("poll.source.errors", description: "Number of source-level poll errors");
+    public static readonly Counter<long> FilesDiscovered = Meter.CreateCounter<long>("files.discovered", description: "Number of files discovered by pollers");
+    public static readonly Counter<long> FilesSkippedUnstable = Meter.CreateCounter<long>("files.skipped.unstable", description: "Files skipped because not yet stable");
 
     // Histograms
     public static readonly Histogram<double> ProcessingDurationMs = Meter.CreateHistogram<double>("processing.duration.ms", unit: "ms", description: "File processing duration in milliseconds");
+    public static readonly Histogram<double> PollCycleDurationMs = Meter.CreateHistogram<double>("poll.cycle.duration.ms", unit: "ms", description: "Poll cycle duration in milliseconds");
 }

@@ -80,6 +80,8 @@ Temporary container for all core layers. Internal organization must enforce sepa
 
 When in doubt: High-level policies do not import low-level implementation details.
 
+Also when adding package references, use dotnet add package.
+
 ---
 
 ## 5. Naming Conventions

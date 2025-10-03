@@ -14,7 +14,8 @@ public class InMemoryFileEventQueueTests
         Metadata: new FileMetadata($"/tmp/{name}.dat", 10, DateTimeOffset.UtcNow, "sha256", null),
         DiscoveredAtUtc: DateTimeOffset.UtcNow,
         Protocol: "local",
-        DestinationPath: $"/dest/{name}.dat");
+        DestinationPath: $"/dest/{name}.dat",
+        DeleteAfterTransfer: false);
 
     [Fact]
     public async Task Enqueue_Then_Dequeue_Single_Item()
@@ -74,7 +75,7 @@ public class InMemoryFileEventQueueTests
     {
         var validator = new BasicFileEventValidator();
         IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance, validator);
-        var invalid = new FileEvent("", new FileMetadata("", -1, DateTimeOffset.UtcNow, "invalidhash", null), DateTimeOffset.UtcNow, "local", "");
+        var invalid = new FileEvent("", new FileMetadata("", -1, DateTimeOffset.UtcNow, "invalidhash", null), DateTimeOffset.UtcNow, "local", "", false);
         var r = await queue.EnqueueAsync(invalid, CancellationToken.None);
         Assert.True(r.IsFailure);
         Assert.Equal(Error.Validation.EmptyId.Code, r.Error.Code);

@@ -22,7 +22,7 @@ public class InMemoryFileEventQueueDrainTests
         var drained = q.TryDrain(10);
         Assert.Empty(drained);
         // ensure we can still enqueue & drain
-        var fe = new FileEvent("id", new FileMetadata("/tmp/a.txt", 1, DateTimeOffset.UtcNow.AddMinutes(-1), "none", null), DateTimeOffset.UtcNow, "test", "/tmp/a.txt");
+        var fe = new FileEvent("id", new FileMetadata("/tmp/a.txt", 1, DateTimeOffset.UtcNow.AddMinutes(-1), "none", null), DateTimeOffset.UtcNow, "test", "/tmp/a.txt", false);
         await q.EnqueueAsync(fe, CancellationToken.None);
         var drained2 = q.TryDrain(5);
         Assert.Single(drained2);

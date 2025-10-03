@@ -15,4 +15,5 @@ public sealed record FileEvent(
     FileMetadata Metadata,
     DateTimeOffset DiscoveredAtUtc,
     string Protocol,
-    string DestinationPath);
+    string DestinationPath,
+    bool DeleteAfterTransfer = false);

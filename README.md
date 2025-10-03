@@ -4,7 +4,7 @@
 
 > Disclaimer: A significant portion of this project's code is intentionally authored with AI assistance (pair‑programming style) via pull requests that still pass through normal version control, code review, and CI quality gates. All generated contributions are curated, adjusted, and ultimately owned by the repository maintainer. If you spot something that can be improved, please open an issue or PR.
 
-**FileHorizon** is an open-source, container-ready file transfer and orchestration system. Designed as a modern alternative to heavyweight integration platforms, it provides a lightweight yet reliable way to move files across **UNC paths, FTP, and SFTP** while ensuring observability and control. By leveraging **Redis** for distributed coordination, FileHorizon can scale out to multiple parallel containers without duplicate processing, making it suitable for both on-premises and hybrid cloud deployments.
+**FileHorizon** is an open-source, container-ready file transfer and orchestration system. Designed as a modern alternative to heavyweight integration platforms, it provides a lightweight yet reliable way to move files across **local/UNC paths, FTP, and SFTP** while ensuring observability and control. By leveraging **Redis** for distributed coordination, FileHorizon can scale out to multiple parallel containers without duplicate processing, making it suitable for both on-premises and hybrid cloud deployments.
 
 Configuration is centralized through **Azure App Configuration** and **Azure Key Vault**, enabling secure, dynamic management of connections and destinations. With **OpenTelemetry** at its core, FileHorizon delivers unified **logging, metrics, and tracing** out of the box—no separate logging stack required. The system emphasizes **safety and consistency**, ensuring files are only picked up once they are fully written at the source.
 
@@ -48,7 +48,7 @@ curl http://localhost:8080/health
 
 The image defines user `appuser` (UID 1001 by default). If you need to write into mounted volumes, ensure host directories grant appropriate permissions. Override UID/GID at build time if integrating with existing volume ownership models.
 
-### Configuration
+### Configuration (High-Level)
 
 Runtime configuration is provided via `appsettings.json` / environment variables. To override via environment variables, use the standard ASP.NET Core naming pattern, e.g.:
 
@@ -58,6 +58,247 @@ docker run --rm -p 8080:8080 \
 	-e "Features__EnableFileTransfer=true" \
 	filehorizon:dev
 ```
+
+---
+
+## Pollers & Feature Flags
+
+File discovery is handled by protocol-specific pollers composed by a multi-protocol coordinator. Each poller can be toggled independently via feature flags so you can roll out new protocols safely.
+
+Feature flags (section `Features`):
+
+| Flag                 | Default | Purpose                                                                                           |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `EnableLocalPoller`  | `true`  | Enable local/UNC directory polling sources configured under `FileSources` (legacy/local).         |
+| `EnableFtpPoller`    | `false` | Enable FTP remote sources listed in `RemoteFileSources:Sources`.                                  |
+| `EnableSftpPoller`   | `false` | Enable SFTP remote sources listed in `RemoteFileSources:Sources`.                                 |
+| `EnableFileTransfer` | `false` | Perform the actual transfer/move (side effects). When `false`, pipeline simulates discovery only. |
+
+<!-- Orchestrated processor is now the default; no flag required. -->
+
+Environment variable examples:
+
+```
+Features__EnableLocalPoller=true
+Features__EnableFtpPoller=false
+Features__EnableSftpPoller=true
+Features__EnableFileTransfer=true
+```
+
+If all three poller flags are disabled the composite poller runs with an empty set (harmless no-op). This is useful for staging environments while only processing already enqueued events.
+
+---
+
+## Remote Source Configuration
+
+Remote (FTP/SFTP) directories are defined under the `RemoteFileSources` options section. Each source entry specifies protocol, connection details, remote path, and readiness behavior.
+
+Example `appsettings.json` excerpt:
+
+```json
+{
+  "RemoteFileSources": {
+    "Sources": [
+      {
+        "Name": "UpstreamFtp",
+        "Protocol": "Ftp",
+        "Host": "ftp.example.com",
+        "Port": 21,
+        "RemotePath": "/drop",
+        "UsernameSecret": "secrets:ftp-user",
+        "PasswordSecret": "secrets:ftp-pass",
+        "MinStableSeconds": 5
+      },
+      {
+        "Name": "PartnerSftp",
+        "Protocol": "Sftp",
+        "Host": "sftp.partner.net",
+        "Port": 22,
+        "RemotePath": "/inbound",
+        "UsernameSecret": "secrets:sftp-user",
+        "PasswordSecret": "secrets:sftp-pass",
+        "PrivateKeySecret": "secrets:sftp-key",
+        "PrivateKeyPassphraseSecret": "secrets:sftp-key-pass",
+        "MinStableSeconds": 8
+      }
+    ]
+  }
+}
+```
+
+Environment variable form (first FTP source):
+
+```
+RemoteFileSources__Sources__0__Name=UpstreamFtp
+RemoteFileSources__Sources__0__Protocol=Ftp
+RemoteFileSources__Sources__0__Host=ftp.example.com
+RemoteFileSources__Sources__0__Port=21
+RemoteFileSources__Sources__0__RemotePath=/drop
+RemoteFileSources__Sources__0__UsernameSecret=secrets:ftp-user
+RemoteFileSources__Sources__0__PasswordSecret=secrets:ftp-pass
+RemoteFileSources__Sources__0__MinStableSeconds=5
+```
+
+Validation rules enforced at startup:
+
+- `Name`, `Protocol`, `Host`, `RemotePath` required.
+- `Port` must be > 0.
+- Appropriate credential secret(s) must be present (username/password or key for SFTP; username/password for FTP).
+- `MinStableSeconds` must be >= 0.
+
+### Secrets
+
+Secrets are referenced indirectly (`UsernameSecret`, `PasswordSecret`, etc.). The application resolves them through an `ISecretResolver` abstraction. In development a simple in-memory + environment variable resolver is used; production hosts should plug in Azure Key Vault (or alternative) without changing poller code.
+
+### Readiness (Size Stability)
+
+Files are only enqueued once their size remains stable for `MinStableSeconds`. A per-file observation snapshot retains last size & timestamp; unstable files are skipped (counted in metrics) until stable. This minimizes partial file ingestion.
+
+### Backoff & Resilience
+
+Each remote source tracks consecutive failures. An exponential backoff (base 5s doubling up to 5 minutes) delays subsequent attempts after errors (connection, auth, listing). A single success resets the backoff window.
+
+---
+
+## Orchestrated Processing and Routing (New)
+
+The orchestrated processor is enabled by default. It uses a modular orchestrator that selects a protocol-specific reader, routes the file via rules, and writes to a destination sink. This unlocks multi-destination routing and a clean separation of concerns.
+
+Key pieces:
+
+- Readers: `local`, `sftp` (FTP reader pending). The orchestrator selects by `FileReference.Protocol`.
+- Router: Matches by protocol and path into a single destination (current implementation is 1:1).
+- Sinks: Currently local filesystem sink; remote sinks can be added later.
+- Idempotency: Prevents duplicate processing (in-memory or Redis-backed store).
+
+### Source File Deletion (Event-Driven)
+
+File deletion after a successful transfer is now controlled directly by each `FileEvent` through the `DeleteAfterTransfer` flag. This removes hidden, config-only coupling in the orchestrator and makes behavior explicit and testable.
+
+How the flag is populated:
+
+| Source Type                   | Config Flag           | Event Field           | Behavior                                                                                                       |
+| ----------------------------- | --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Local (FileSources)           | `DeleteAfterTransfer` | `DeleteAfterTransfer` | When `true`, the original source file is deleted after it has been successfully written to its destination(s). |
+| SFTP (RemoteFileSources:Sftp) | `DeleteAfterTransfer` | `DeleteAfterTransfer` | Remote file removed via SFTP client after successful sink write.                                               |
+| FTP (RemoteFileSources:Ftp)   | `DeleteAfterTransfer` | `DeleteAfterTransfer` | Remote file removed via FTP client after successful sink write.                                                |
+
+Notes:
+
+- If a remote deletion fails (e.g., transient network error), the failure is logged at `Warning` level but processing still succeeds (idempotent by design — file may be re-polled if still present unless already deleted server-side later).
+- Local deletions are attempted only if the file still exists; a missing file (e.g., manual cleanup) does not cause failure.
+- The Redis-backed queue persists the flag (`deleteAfterTransfer` field) so horizontally scaled workers will honor the intent identically.
+- This design allows future protocols (e.g., Cloud object storage) to simply project their own deletion flag into the event without additional orchestrator changes.
+
+Example environment variables:
+
+```
+FileSources__Sources__0__DeleteAfterTransfer=true
+
+# Remote SFTP delete after transfer
+RemoteFileSources__Sftp__0__DeleteAfterTransfer=true
+```
+
+If neither flag is set (`false` / omitted), no deletion occurs; files remain at the source.
+
+### Configuration: Destinations + Routing + Transfer
+
+Example `appsettings.json` excerpt:
+
+```json
+{
+  "Destinations": {
+    "Local": [
+      {
+        "Name": "OutboxA",
+        "BasePath": "/data/outboxA",
+        "Overwrite": true
+      }
+    ],
+    "Sftp": [
+      {
+        "Name": "PartnerX",
+        "Host": "sftp.partner.net",
+        "Port": 22,
+        "RemotePath": "/outbound",
+        "UsernameSecret": "secrets:sftp-user",
+        "PasswordSecret": "secrets:sftp-pass"
+      }
+    ]
+  },
+  "Routing": {
+    "Rules": [
+      {
+        "Match": {
+          "Protocol": "local",
+          "PathPattern": "^/data/inboxA/.+\\.txt$"
+        },
+        "Destination": "OutboxA"
+      }
+    ]
+  },
+  "Transfer": {
+    "ChunkSizeBytes": 32768,
+    "Idempotency": {
+      "Enabled": true,
+      "TtlSeconds": 86400
+    }
+  }
+}
+```
+
+Environment variable form (Windows PowerShell examples):
+
+```
+Destinations__Local__0__Name=OutboxA
+Destinations__Local__0__BasePath=/data/outboxA
+Destinations__Local__0__Overwrite=true
+
+Routing__Rules__0__Match__Protocol=local
+Routing__Rules__0__Match__PathPattern=^/data/inboxA/.+\.txt$
+Routing__Rules__0__Destination=OutboxA
+
+Transfer__ChunkSizeBytes=32768
+Transfer__Idempotency__Enabled=true
+Transfer__Idempotency__TtlSeconds=86400
+```
+
+Notes:
+
+- On Windows, paths are normalized internally; the router matches against a normalized forward-slash path.
+- If Redis is enabled (`Redis__Enabled=true`), the idempotency store uses Redis with TTL; otherwise an in-memory store is used.
+- Current sink support is local filesystem; remote sinks may be added in future.
+
+For a deeper overview see `docs/processing-architecture.md`.
+
+---
+
+## Identity & De‑Duplication
+
+All files (local and remote) are assigned a normalized identity key:
+
+```
+<protocol>://<host>:<port>/<normalized/path>
+```
+
+Local paths use a normalized form (e.g. `local://_/:0/drive/path/file.txt`). This shared scheme powers duplicate suppression and telemetry tagging.
+
+---
+
+## Additional Telemetry (Polling)
+
+Poller metrics (Meter `FileHorizon`):
+
+| Metric                                      | Type    | Description                               | Key Tags                           |
+| ------------------------------------------- | ------- | ----------------------------------------- | ---------------------------------- |
+| `filehorizon.poller.poll_cycles`            | Counter | Number of poll cycles executed per source | `protocol`, `source`               |
+| `filehorizon.poller.files.discovered`       | Counter | Files discovered (ready)                  | `protocol`, `source`               |
+| `filehorizon.poller.files.skipped.unstable` | Counter | Files skipped due to instability          | `protocol`, `source`               |
+| `filehorizon.poller.errors`                 | Counter | Poll errors (enumeration failures)        | `protocol`, `source`, `error.type` |
+
+Traces include an Activity per remote source (`poll.source`) with tags: `protocol`, `host`, `source.name`, `backoff.ms` (if applied).
+
+---
 
 ### Using docker-compose (nerdctl compatible)
 
@@ -212,11 +453,16 @@ find . -maxdepth 1 -type f | wc -l
 
 ## Roadmap (Excerpt)
 
-- Pending message claiming / retry logic for Redis Streams
-- Idempotency and deduplication store
-- Service Bus ingress/egress integration
-- OpenTelemetry metrics/traces instrumentation
-- SFTP/FTP protocol plugins
+Recently completed (this branch): FTP & SFTP pollers, feature flags, remote readiness/backoff, poller telemetry.
+
+Upcoming / still planned:
+
+- Persistent idempotency & deduplication registry (Redis / durable store)
+- Message claiming / retry hardening for Redis Streams
+- Service Bus ingress / egress bridge
+- Extended telemetry (error categorization, size histograms)
+- Configurable secret resolver (production Key Vault implementation)
+- Optional archive / checksum verification stage
 
 ---
 
@@ -226,15 +472,17 @@ FileHorizon ships with unified tracing, metrics, and structured logging via **Op
 
 ### What Is Collected
 
-- Traces: file processing spans (`file.process`), queue enqueue/dequeue spans (`queue.enqueue`, `queue.dequeue`), lifecycle span (`pipeline.lifetime`).
+- Traces: file processing spans (`file.process`, `file.orchestrate`), reader/sink spans (`reader.open`, `sink.write`), queue enqueue/dequeue spans (`queue.enqueue`, `queue.dequeue`), lifecycle span (`pipeline.lifetime`).
 - Metrics (Meter `FileHorizon`):
   - `files.processed` (counter)
   - `files.failed` (counter)
+  - `bytes.copied` (counter)
   - `queue.enqueued` (counter)
   - `queue.enqueue.failures` (counter)
   - `queue.dequeued` (counter)
   - `queue.dequeue.failures` (counter)
   - `processing.duration.ms` (histogram)
+  - `poll.cycle.duration.ms` (histogram)
 
 ### Prometheus Endpoint
 
@@ -316,6 +564,8 @@ Currently logs go through the OpenTelemetry logging provider. If an OTLP exporte
 | file.process            | `file.protocol`                 | `local`                   |
 | file.process            | `file.source_path`              | `/data/inbox/file1.txt`   |
 | file.process            | `file.size_bytes`               | `2048`                    |
+| reader.open             | `file.protocol`                 | `sftp`                    |
+| sink.write              | `sink.name`                     | `OutboxA`                 |
 | queue.enqueue / dequeue | `messaging.system`              | `redis`                   |
 | queue.enqueue / dequeue | `messaging.destination`         | `filehorizon:file-events` |
 | queue.dequeue           | `messaging.batch.message_count` | `10`                      |

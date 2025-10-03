@@ -21,7 +21,8 @@ public class RedisFileEventQueueTests : IClassFixture<RedisTestFixture>
         Metadata: new FileMetadata($"/tmp/{name}.dat", 10, DateTimeOffset.UtcNow, "sha256", null),
         DiscoveredAtUtc: DateTimeOffset.UtcNow,
         Protocol: "local",
-        DestinationPath: $"/dest/{name}.dat");
+        DestinationPath: $"/dest/{name}.dat",
+        DeleteAfterTransfer: false);
 
     public RedisFileEventQueueTests(RedisTestFixture fixture) => _fixture = fixture;
 
@@ -85,7 +86,7 @@ public class RedisFileEventQueueTests : IClassFixture<RedisTestFixture>
     {
         if (!_fixture.Available) return;
         await using var queue = _fixture.NewQueue();
-        var invalid = new FileEvent("", new FileMetadata("", -1, DateTimeOffset.UtcNow, "invalidhash", null), DateTimeOffset.UtcNow, "local", "");
+        var invalid = new FileEvent("", new FileMetadata("", -1, DateTimeOffset.UtcNow, "invalidhash", null), DateTimeOffset.UtcNow, "local", "", false);
         var r = await queue.EnqueueAsync(invalid, CancellationToken.None);
         Assert.True(r.IsFailure);
     }
