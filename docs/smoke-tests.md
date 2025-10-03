@@ -33,7 +33,7 @@ SFTP service (optional, discovery only for now)
   - Username: demo
   - Password: password
   - Upload directory: `/upload` (mapped to host `_data/sftp-in`)
-- IMPORTANT: SFTP poller is disabled by default. You can enable it by setting `Features__EnableSftpPoller=true` on the `poller` service and restarting that service. However, end-to-end file transfer from SFTP to local destinations is not implemented yet—the current processor only supports local filesystem moves. With SFTP polling enabled, you can still verify that files are discovered (via logs/metrics), but transfers will not complete until the new orchestrated processor lands.
+- IMPORTANT: SFTP poller is disabled by default. You can enable it by setting `Features__EnableSftpPoller=true` on the `poller` service and restarting that service. The orchestrator currently supports reading from SFTP and writing only to Local sinks; remote destination sinks (e.g., SFTP out, Blob) are not yet implemented. With SFTP polling enabled you can verify discovery (logs/metrics) and local transfers when routing rules target a Local destination.
 
 Observability pointers
 
@@ -61,24 +61,22 @@ Configure minimal Routing and Destinations via environment variables (examples):
 
 Or appsettings snippet (Development):
 
-    ```json
-    {
-
-// no feature flag required; orchestrator is default
-"Routing": {
-"Rules": [
+```json
 {
-"Name": "local-all",
-"Protocol": "local",
-"PathGlob": "\*_/_.\*",
-"Destinations": ["OutboxA"],
-"Overwrite": true
-}
-]
-},
-"Destinations": {
-"Local": [{ "Name": "OutboxA", "RootPath": "./_data/outboxA" }]
-}
+  "Routing": {
+    "Rules": [
+      {
+        "Name": "local-all",
+        "Protocol": "local",
+        "PathGlob": "**/*.*",
+        "Destinations": ["OutboxA"],
+        "Overwrite": true
+      }
+    ]
+  },
+  "Destinations": {
+    "Local": [{ "Name": "OutboxA", "RootPath": "./_data/outboxA" }]
+  }
 }
 ```
 
@@ -87,9 +85,27 @@ Verify end-to-end
 - With orchestrator enabled and rules configured:
   - Place a file in `_data/inboxA` (e.g., `_data/inboxA/sample.txt`).
   - Within a moment, confirm the file appears in `_data/outboxA`.
-  - Check logs for a `file.process` span and `file.orchestrate` activity; metrics counters will increment.
+  - Check logs or traces for a `file.orchestrate` activity plus `reader.open` and `sink.write` spans; metrics counters (`files.processed`, `bytes.copied`) will increment.
 
 Notes
 
-- Orchestrator currently uses the first matching destination only. Multi-destination writes will arrive later.
+- Orchestrator currently uses only the first matching destination (single-destination routing). Fan-out is planned.
 - Paths in rules/globs are OS-dependent; Windows paths are normalized internally for glob matching.
+- Idempotency: enable durable suppression by setting `Idempotency__Enabled=true` (backed by Redis or in-memory depending on configuration). Key currently uses the event Id; a richer identity hash is planned.
+- Redis queue + idempotency: set `Redis__Enabled=true` to activate Redis Streams + Redis-backed idempotency (if provided). Otherwise an in-memory queue/idempotency store is used (non-durable across restarts).
+- Quick metrics checks (PowerShell):
+  - `curl http://localhost:8080/metrics | Select-String files_processed`
+  - `curl http://localhost:8080/metrics | Select-String poll_cycles`
+
+Quick end-to-end validation (PowerShell):
+
+```powershell
+# Place a uniquely named file
+Set-Content -Path .\_data\inboxA\sample-$([guid]::NewGuid().ToString('N')).txt -Value 'test'
+
+# Wait a moment then list destination
+Get-ChildItem .\_data\outboxA
+
+# Check metrics for processed counter
+curl http://localhost:8080/metrics | Select-String files_processed
+```

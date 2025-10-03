@@ -2,15 +2,19 @@
 
 ## Observability (OpenTelemetry)
 
-- Add OpenTelemetry packages (Tracing, Metrics, Logging) in Host only.
-- Configure Resource builder with service.name=FileHorizon
-- Exporters: Prometheus + OTLP (future). No other logging frameworks.
+Status: Partially Implemented
+
+- Host exposes Prometheus metrics via OpenTelemetry Meter (implemented metrics listed in `TelemetryInstrumentation`).
+- Tracing activities emitted: `file.orchestrate`, `reader.open`, `sink.write`.
+- Pending: add OpenTelemetry exporter wiring (OTLP exporter), structured logging via OTEL, additional spans (router.\*, fan-out, retries).
 
 ## Redis Streams Integration
 
-- Add abstractions for Redis stream consumer/producer (already partial via IFileEventQueue).
-- Implement Infrastructure/Redis/RedisFileEventQueue using StackExchange.Redis.
-- Handle consumer group creation, claim pending messages on startup, ack after processing.
+Status: Implemented (baseline)
+
+- `RedisFileEventQueue` implemented with consumer group option.
+- Fallback to in-memory queue when Redis disabled or unavailable.
+- Pending Enhancements: claiming pending messages on startup (partial), dead-letter stream for poison events, visibility timeout enforcement.
 
 ## Azure Service Bus Ingress / Egress (External Integration)
 
@@ -56,11 +60,13 @@
 - Introduce IFileTransferService abstraction with protocol-specific implementations.
 - Add optional egress publish step (post-success). Make failure to publish configurable (fail pipeline vs best-effort).
 
-## Idempotency / Exactly-Once (Planned)
+## Idempotency / Exactly-Once
 
-- Current state: in-memory suppression of duplicates during a process lifetime.
-- Planned: Redis-backed registry keyed by identity hash (protocol + host + path + size + mtime) for cross-instance de-dup.
-- Extend to guard egress notifications / downstream publishes.
+Status: Implemented (Initial) / Planned (Enhanced)
+
+- Current: In-memory or Redis-backed (if enabled) key = `file:{FileEvent.Id}`.
+- Planned: richer identity hash (protocol + host + path + size + mtime + routing fingerprint) for cross-instance de-dup and guarding egress notifications.
+- Future: exactly-once semantics across multi-destination fan-out + egress publishes.
 
 ## Validation & Mapping
 
@@ -76,8 +82,9 @@
 
 ## Containerization
 
-- Add Dockerfile (multi-stage) for Host.
-- Add docker-compose for local Redis + application.
+Status: Implemented (Dockerfile + docker-compose present)
+
+- Pending: multi-arch build optimization, slim base image hardening, health check integration for poller & worker separation.
 
 ## Lint / Analyzers
 
@@ -89,7 +96,43 @@
 
 ---
 
-Generated scaffold prepared for incremental additions.
+---
+
+## Completed (Historical)
+
+| Area                  | Summary                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| Pollers               | Local, FTP, SFTP pollers behind `IFilePoller`; composite multiprotocol poller.      |
+| Orchestrator          | `FileProcessingOrchestrator` replaces legacy local processor.                       |
+| Local Sink            | Filesystem write with basic overwrite + rename pattern support.                     |
+| SFTP Reader           | SFTP source reading supported (no SFTP sink yet).                                   |
+| Redis Queue           | Pluggable Redis Streams queue with fallback to in-memory.                           |
+| Idempotency (Phase 1) | In-memory + Redis store keyed by event Id.                                          |
+| Metrics (Baseline)    | Processing, queue, polling, bytes copied counters + basic histograms.               |
+| Config Model          | Destinations, Routing, Transfer, Remote sources option classes with validation.     |
+| Deletion Support      | Post-transfer deletion for local, SFTP, FTP sources (where credentials resolvable). |
+
+## Roadmap Status Table
+
+| Item                              | Status  | Next Action                                              |
+| --------------------------------- | ------- | -------------------------------------------------------- |
+| Fan-out (multi-destination)       | Planned | Implement destination loop + error policy                |
+| Per-destination retries           | Planned | Introduce retry abstraction & options                    |
+| SFTP Sink                         | Planned | Implement write & host key validation                    |
+| Cloud Object Store Sink (Blob/S3) | Planned | Add first cloud sink behind feature flag                 |
+| Enhanced Idempotency Key          | Planned | Derive deterministic hash & migrate store keys           |
+| Service Bus Ingress               | Planned | Bridge queue -> internal events with validation          |
+| Service Bus Egress                | Planned | Publish notifications post-success with idempotent guard |
+| Router Metrics & fan-out counters | Planned | Emit `router.matches`, `router.fanout.count`             |
+| Sink failure metrics              | Planned | Add `sink.write.failures` with error classification      |
+| Checksum / Integrity              | Planned | Optional hash compute + verification step                |
+| Archive / Retention               | Planned | Post-write archival pipeline stage                       |
+| Extended Readiness Strategies     | Planned | Temp extension exclusion, rename detection               |
+| OTLP Exporter                     | Planned | Wire OTLP span & metric exporter in Host                 |
+| Security Hardening                | Planned | Key Vault secret resolver implementation                 |
+| Parallel Processing (bounded)     | Planned | Introduce limited concurrency per worker                 |
+
+---
 
 ## Orchestrator (Implemented)
 
@@ -101,11 +144,14 @@ Generated scaffold prepared for incremental additions.
 
 ### Immediate Next Increment Ideas (Refreshed)
 
-1. Persist duplicate suppression across restarts (Redis set or sorted set with TTL).
-2. Add rename / temp extension readiness strategy.
-3. Parallelize processing stage with bounded degree after queue dequeue (configurable).
-4. Introduce archive / retention policy (move processed files to structured archive root with date partitioning).
-5. Add more granular telemetry: backoff histogram, per-protocol error breakdown.
+1. Multi-destination fan-out support (write loop + failure policy decision: all-or-nothing vs partial retry).
+2. Enhanced idempotency key (include identity hash) + migration path.
+3. Sink failure metric & router.matches counter.
+4. Per-destination retry/backoff configuration.
+5. Service Bus ingress bridge (scaffold + feature flag).
+6. Archive / retention pipeline stage (optional, post-success).
+
+Secondary (after above): readiness enhancements, checksum option, OTLP exporter wiring.
 
 ### Logging (Implemented Increment)
 
@@ -118,6 +164,11 @@ Generated scaffold prepared for incremental additions.
 
 ### Tech Debt / Follow-Ups
 
-- Replace naive polling delay with adaptive sleep (short circuit if queue still has backlog).
-- Consider partial parallel processing (bounded degree) once FileProcessingService performs real I/O.
-- Evaluate using `PeriodicTimer` for clarity over Task.Delay loop.
+- Adaptive polling delay (short-circuit when backlog remains).
+- Bounded parallelism for processing (once multi-destination implemented).
+- Replace delay loops with `PeriodicTimer` for clarity.
+- Consolidate secret resolution to allow pluggable providers (Key Vault, AWS Secrets Manager).
+
+---
+
+Generated scaffold updated to reflect current implementation and forward plan.
