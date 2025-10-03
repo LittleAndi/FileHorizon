@@ -1,6 +1,6 @@
-# File Processing Architecture (Vision)
+# File Processing Architecture (Vision & Current Status)
 
-This document describes the recommended processing architecture for FileHorizon as sources and destinations expand. It captures the target abstractions, configuration model, scalability characteristics, and a pragmatic migration plan from the current implementation.
+This document describes the target processing architecture for FileHorizon and the current implementation state. It captures abstractions, configuration model, scalability characteristics, and a pragmatic migration plan. Sections annotated with (Implemented), (In Progress), or (Planned) reflect repository reality on the `feat/ftp-pollers` branch at the time of this update.
 
 ## Why change
 
@@ -124,11 +124,35 @@ Edge cases
 
 ## Telemetry
 
-- Activity: `file.process` spanning the entire orchestrated copy; child spans for `reader.open`, `sink.write` per destination.
-- Metrics:
-  - `files.processed`, `files.failed`, `bytes.copied` (per destination), `processing.duration.ms` histogram
-  - `sink.write.failures` with `destination`, `error.type`
-  - `router.matches` and `router.fanout.count`
+Current implemented spans / activities:
+
+- `file.orchestrate` (overall orchestrator execution – current primary span)
+- `reader.open` (wrapping content reader open)
+- `sink.write` (inside local sink write)
+
+Planned / not yet emitted:
+
+- `file.process` (parent umbrella span if we introduce a higher-level service boundary)
+- `router.route` (to measure routing latency)
+- Additional destination-specific spans once multiple sinks / fan-out arrive.
+
+Implemented metrics (see `TelemetryInstrumentation`):
+
+- `files.processed`
+- `files.failed`
+- `bytes.copied`
+- `processing.duration.ms` (histogram)
+- `poll.cycles`, `poll.cycle.duration.ms`
+- `files.discovered`, `files.skipped.unstable`
+- Queue metrics: `queue.enqueued`, `queue.dequeued`, `queue.enqueue.failures`, `queue.dequeue.failures`
+
+Not yet implemented (previously listed aspirationally):
+
+- `sink.write.failures` (would distinguish failure categories per sink)
+- `router.matches`
+- `router.fanout.count`
+
+These remain in the roadmap and will be added once multi-destination routing is implemented.
 
 ## Security
 
@@ -138,40 +162,24 @@ Edge cases
 
 ## Migration plan (incremental)
 
-1. Introduce contracts
+| Step | Description                                                                              | Status      | Notes                                                                            |
+| ---- | ---------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------- |
+| 1    | Introduce contracts (`IFileContentReader`, `IFileSink`, `IFileRouter`, `IFileProcessor`) | Implemented | Interfaces present & used in DI                                                  |
+| 2    | First adapters (Local reader & sink, SFTP reader)                                        | Implemented | Local sink + local & SFTP readers registered                                     |
+| 3    | Simple router (1:1 SourceName -> Destination)                                            | Implemented | `SimpleFileRouter` returns first matching plan                                   |
+| 4    | Orchestrator replaces legacy processor                                                   | Implemented | `FileProcessingOrchestrator` registered as sole `IFileProcessor`; legacy removed |
+| 5    | Idempotency (Redis + in‑memory fallback)                                                 | Implemented | Key = `file:{FileEvent.Id}`; future richer key planned                           |
+| 6    | Fan‑out & retries                                                                        | Planned     | Current orchestrator processes first destination only                            |
+| 7    | New sinks (SFTP, Blob, etc.)                                                             | Planned     | Only Local sink implemented; SFTP is reader-only                                 |
+| 8    | Expanded telemetry (router.\*, sink failure metrics)                                     | Planned     | Metrics subset live; additional counters pending fan‑out                         |
 
-- Add `IFileContentReader`, `IFileSink`, `IFileRouter`, `IFileProcessor` (orchestrator).
-- Provide empty stubs and unit tests for interfaces.
+### Current limitations
 
-2. Implement first adapters
-
-- Readers: Local, SFTP (re‑use existing SSH.NET client abstraction).
-- Sinks: Local (write to filesystem).
-
-3. Simple router
-
-- Rule: map `SourceName` -> `DestinationName` (1:1). Bind minimal `RoutingOptions`.
-
-4. Orchestrator
-
-- Replace the current local transfer processor behind the `IFileProcessor` DI binding with the orchestrator.
-- Keep the old class around temporarily, then remove once parity is verified.
-
-5. Idempotency
-
-- Add Redis‑backed store for processed keys; integrate into orchestrator.
-
-6. Fan‑out & retries
-
-- Add support for multiple destinations and per‑destination retry policy.
-
-7. New sinks
-
-- Add SFTP sink, then a cloud object store sink (e.g., Azure Blob) behind feature flags.
-
-8. Telemetry & docs
-
-- Expand metrics/trace coverage, update dashboards and README.
+- Single destination per file event (first route plan only).
+- No per-destination retry abstraction yet (errors propagate immediately).
+- Idempotency key is simplistic (event ID); routing/destination fingerprint not yet included.
+- No cross-destination fan-out or partial success policy.
+- Only local writes; remote destination sinks are future work.
 
 ## Performance considerations
 
@@ -184,11 +192,29 @@ Edge cases
 - Feature flags gate new behavior (`EnableFileTransfer`, destination/sink enablement flags if needed).
 - Can run orchestrator in shadow mode (read & route only) while still executing the legacy local processor, to verify route decisions via telemetry before switching.
 
-## Open questions
+## Open questions (carried forward)
 
-- Rename conventions across destinations (time‑based partitioning, collision handling).
-- Partial success policy on fan‑out.
-- Checksums: compute at source vs at sink vs end‑to‑end verification.
+- Rename conventions across destinations (time‑based partitioning, collision handling) – Deferred design.
+- Partial success policy on fan‑out – To be decided alongside fan‑out implementation.
+- Checksums: compute at source vs at sink vs end‑to‑end verification – TBD (will tie into integrity metrics & idempotency enhancement).
+
+## Verification matrix
+
+| Concern                                     | Implemented? | Reference                                     | Next Step                                  |
+| ------------------------------------------- | ------------ | --------------------------------------------- | ------------------------------------------ |
+| Routing (single destination)                | Yes          | `SimpleFileRouter`                            | Add multi-destination fan-out              |
+| Idempotency (in-memory/Redis)               | Yes          | `IdempotencyOptions`, `RedisIdempotencyStore` | Enhance key with file identity hash        |
+| Telemetry basic metrics                     | Yes          | `TelemetryInstrumentation`                    | Add router & sink failure metrics          |
+| Activity spans (orchestrate/read/write)     | Yes          | Orchestrator & Local sink                     | Introduce higher-level `file.process` span |
+| SFTP reader                                 | Yes          | `SftpFileContentReader`                       | Add SFTP sink implementation               |
+| FTP poller & deletion                       | In Progress  | `FtpPoller`, orchestrator deletion logic      | Add FTP reader & sink if needed            |
+| Fan-out                                     | No           | N/A                                           | Implement multi-destination write loop     |
+| Retry policy (writes)                       | No           | N/A                                           | Introduce configurable retry/backoff       |
+| Archive / retention                         | No           | N/A                                           | Add post-write archive step                |
+| Service Bus ingress/egress                  | No           | N/A                                           | Implement as async bridges                 |
+| Checksum / integrity                        | No           | N/A                                           | Add optional hash compute & validation     |
+| Sink abstraction for cloud                  | No           | N/A                                           | Implement Blob/S3 sinks                    |
+| Extended metrics (router.\*, sink.failures) | No           | N/A                                           | Emit after fan-out                         |
 
 ---
 
