@@ -17,5 +17,10 @@ public sealed class FtpSourceOptions
     public string? PasswordSecretRef { get; set; } // Key Vault or external secret reference; resolved in Host layer
     public string? DestinationPath { get; set; } // Optional override destination root
     public bool CreateDestinationDirectories { get; set; } = true;
+    /// <summary>
+    /// If true, delete the remote file from the FTP source after it has been successfully transferred to all destinations.
+    /// Defaults to false for safety.
+    /// </summary>
+    public bool DeleteAfterTransfer { get; set; } = false;
     public bool Enabled { get; set; } = true; // feature flag per source
 }

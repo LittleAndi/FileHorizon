@@ -75,12 +75,13 @@ public sealed class SftpFileContentReader : IFileContentReader
             return Result<Stream>.Failure(Error.Validation.Invalid("Invalid SFTP file reference; host/port/path missing"));
         }
         var creds = await ResolveCredentialsAsync(file.SourceName, host, port, ct).ConfigureAwait(false);
-        await using var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase);
+        // REMOVE await using (must keep client alive for stream lifetime)
+        var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase);
         try
         {
             await client.ConnectAsync(ct).ConfigureAwait(false);
             var stream = client.OpenRead(remotePath);
-            // Important: we must not dispose client before the consumer reads; wrap stream to dispose client when stream is disposed
+            // Client disposed when caller disposes returned stream
             return Result<Stream>.Success(new ClientBoundStream(stream, client));
         }
         catch (Exception ex)

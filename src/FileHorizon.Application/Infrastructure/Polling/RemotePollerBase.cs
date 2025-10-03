@@ -89,7 +89,6 @@ public abstract class RemotePollerBase : IFilePoller
         using var sourceActivity = Common.Telemetry.TelemetryInstrumentation.ActivitySource.StartActivity("poll.remote.source", System.Diagnostics.ActivityKind.Internal);
         sourceActivity?.SetTag("poll.source", source.Name);
 
-        // NEW: listing start log
         _logger.LogTrace("Listing files from source {Name} path={Path} recursive={Recursive} pattern={Pattern}",
             source.Name, source.RemotePath, source.Recursive, source.Pattern);
 
@@ -105,43 +104,104 @@ public abstract class RemotePollerBase : IFilePoller
             return;
         }
 
-        var readiness = new SizeStableReadinessChecker(TimeSpan.FromSeconds(Math.Max(0, source.MinStableSeconds)));
+        // Track window and counters
+        var window = TimeSpan.FromSeconds(Math.Max(0, source.MinStableSeconds));
+        var readiness = new SizeStableReadinessChecker(window);
 
-        var seen = 0; // NEW: simple visibility counter
+        var seen = 0;
+        var readyCount = 0;
+        var unstableCount = 0;
+        var duplicateCount = 0;
 
         await foreach (var file in client.ListFilesAsync(source.RemotePath, source.Recursive, source.Pattern, ct).ConfigureAwait(false))
         {
             seen++;
+            if (ct.IsCancellationRequested) break;
+            if (file.IsDirectory) continue;
 
-            if (ct.IsCancellationRequested)
+            var key = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
+            _observations.TryGetValue(key, out var prev);
+            var alreadyDispatched = _dispatched.ContainsKey(key);
+
+            // Explain readiness decision
+            if (_logger.IsEnabled(LogLevel.Trace))
             {
-                break;
+                if (prev is null)
+                {
+                    if (window > TimeSpan.Zero)
+                        _logger.LogTrace("First observation for {Key}; waiting windowSec={Window}", key, (int)window.TotalSeconds);
+                    else
+                        _logger.LogTrace("First observation for {Key}; window=0 so ready if unchanged checks pass", key);
+                }
+                else
+                {
+                    var changed = prev.Size != file.Size || prev.LastWriteTimeUtc != file.LastWriteTimeUtc;
+                    if (changed)
+                    {
+                        _logger.LogTrace("Unstable {Key}: changed size/mtime (prev: {PrevSize},{PrevMTime:o} -> curr: {Size},{MTime:o})",
+                            key, prev.Size, prev.LastWriteTimeUtc, file.Size, file.LastWriteTimeUtc);
+                    }
+                    else
+                    {
+                        var stableForTrace = DateTimeOffset.UtcNow - prev.LastObservedUtc;
+                        _logger.LogTrace("Stable {Key}: stableForSec={StableFor}/{WindowSec}", key, (int)stableForTrace.TotalSeconds, (int)window.TotalSeconds);
+                    }
+                }
             }
 
-            if (file.IsDirectory) continue; // safety
-            var key = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
-            var previous = _observations.TryGetValue(key, out var snap) ? snap : null;
-            var alreadyDispatched = _dispatched.ContainsKey(key);
-            var ready = await readiness.IsReadyAsync(file, previous, ct).ConfigureAwait(false);
             var now = DateTimeOffset.UtcNow;
-            var newSnap = new FileObservationSnapshot(file.Size, file.LastWriteTimeUtc, previous?.FirstObservedUtc ?? now, now);
+            var unchanged = prev is not null &&
+                            prev.Size == file.Size &&
+                            prev.LastWriteTimeUtc == file.LastWriteTimeUtc;
+
+            // Keep the old LastObservedUtc as the stability baseline if unchanged; otherwise reset.
+            FileObservationSnapshot newSnap;
+            if (unchanged)
+            {
+                // Do NOT move the baseline; this lets stable duration accumulate.
+                newSnap = new FileObservationSnapshot(
+                    file.Size,
+                    file.LastWriteTimeUtc,
+                    prev!.FirstObservedUtc,
+                    prev.LastObservedUtc); // preserve last unchanged baseline
+            }
+            else
+            {
+                // Content (size/mtime) changed -> reset baseline to now.
+                newSnap = new FileObservationSnapshot(
+                    file.Size,
+                    file.LastWriteTimeUtc,
+                    prev?.FirstObservedUtc ?? now,
+                    now);
+            }
+
             _observations[key] = newSnap;
+
+            var stableFor = prev is null ? TimeSpan.Zero : (DateTimeOffset.UtcNow - newSnap.LastObservedUtc);
+            // Recompute readiness using original previous snapshot (prev) which had the old baseline
+            var ready = await readiness.IsReadyAsync(file, prev, ct).ConfigureAwait(false);
+
             if (!ready)
             {
+                unstableCount++;
                 Common.Telemetry.TelemetryInstrumentation.FilesSkippedUnstable.Add(1, KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()));
                 continue;
             }
-            // Suppress duplicate enqueue if file already dispatched and still ready (unchanged enough for readiness)
+
             if (alreadyDispatched)
             {
-                continue; // duplicate unchanged file
+                duplicateCount++;
+                _logger.LogTrace("Suppressing duplicate dispatch for {Key}", key);
+                continue;
             }
+
             await EnqueueEventAsync(source, client, file, key, ct).ConfigureAwait(false);
             _dispatched[key] = (newSnap.Size, newSnap.LastWriteTimeUtc);
+            readyCount++;
         }
 
-        // NEW: listing completion log
-        _logger.LogDebug("Completed listing for source {Name}. itemsSeen={Seen}", source.Name, seen);
+        _logger.LogDebug("Completed listing for source {Name}. itemsSeen={Seen}, ready={Ready}, unstable={Unstable}, duplicate={Duplicate}",
+            source.Name, seen, readyCount, unstableCount, duplicateCount);
     }
 
     private async Task EnqueueEventAsync(IRemoteFileSourceDescriptor source, IRemoteFileClient client, IRemoteFileInfo file, string identityKey, CancellationToken ct)
@@ -186,6 +246,7 @@ public abstract class RemotePollerBase : IFilePoller
         string? DestinationPath { get; }
         string Host { get; }
         int Port { get; }
+        bool DeleteAfterTransfer { get; }
     }
 
     private sealed class BackoffState

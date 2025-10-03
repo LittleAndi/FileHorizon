@@ -19,5 +19,10 @@ public sealed class SftpSourceOptions
     public string? HostKeyFingerprint { get; set; } // optional pinning
     public string? DestinationPath { get; set; }
     public bool CreateDestinationDirectories { get; set; } = true;
+    /// <summary>
+    /// If true, delete the remote file from the SFTP source after it has been successfully transferred to all destinations.
+    /// Defaults to false for safety.
+    /// </summary>
+    public bool DeleteAfterTransfer { get; set; } = false;
     public bool Enabled { get; set; } = true;
 }

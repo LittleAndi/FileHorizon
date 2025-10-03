@@ -104,15 +104,25 @@ services:
       - Logging__LogLevel__Microsoft=Warning
       - Logging__LogLevel__Microsoft.Hosting.Lifetime=Warning
       - Logging__LogLevel__FileHorizon=Debug
-      # Role + feature flags
       - Pipeline__Role=Worker
+      # Delete remote file after successful transfer (optional; defaults false)
       - Features__EnableFileTransfer=true
       - Features__EnableLocalPoller=false
       - Features__EnableFtpPoller=false
-      - Features__EnableSftpPoller=false
-      # Polling behavior
-      - Polling__IntervalMilliseconds=1000
-      - Polling__BatchReadLimit=10
+      - Features__EnableSftpPoller=false # keep false to avoid double polling
+      # Remote SFTP source definition (available for future on-demand transfer)
+      - RemoteFileSources__Sftp__0__Name=PartnerSftp
+      - RemoteFileSources__Sftp__0__Host=sftp
+      - RemoteFileSources__Sftp__0__Port=22
+      - RemoteFileSources__Sftp__0__RemotePath=/upload
+      - RemoteFileSources__Sftp__0__Username=demo
+      - RemoteFileSources__Sftp__0__PasswordSecretRef=SFTP_PASS
+      - RemoteFileSources__Sftp__0__Pattern=*.* # or * if you want extension‑less files
+      - RemoteFileSources__Sftp__0__MinStableSeconds=5
+      - RemoteFileSources__Sftp__0__DeleteAfterTransfer=true
+      - RemoteFileSources__Sftp__0__Enabled=true
+      # Share secret
+      - SFTP_PASS=password
       # Enable Redis queue
       - Redis__Enabled=true
       - Redis__Host=redis

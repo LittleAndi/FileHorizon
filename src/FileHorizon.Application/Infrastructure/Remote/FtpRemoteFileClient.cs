@@ -78,6 +78,23 @@ public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, str
         }
     }
 
+    public async Task DeleteAsync(string fullPath, CancellationToken ct)
+    {
+        if (_client is null) throw new InvalidOperationException("Client not connected");
+        try
+        {
+            await _client.DeleteFile(fullPath, ct).ConfigureAwait(false);
+        }
+        catch (FtpCommandException)
+        {
+            // ignore missing or permission errors silently for now
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete FTP file {Path}", fullPath);
+        }
+    }
+
     private static bool GlobMatch(string name, string pattern)
     {
         return string.IsNullOrWhiteSpace(pattern)

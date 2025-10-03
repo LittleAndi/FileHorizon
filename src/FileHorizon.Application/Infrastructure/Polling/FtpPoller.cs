@@ -53,5 +53,6 @@ public sealed class FtpPoller(IFileEventQueue queue,
         public string? DestinationPath => Options.DestinationPath;
         public string Host => Options.Host;
         public int Port => Options.Port;
+        public bool DeleteAfterTransfer => Options.DeleteAfterTransfer;
     }
 }

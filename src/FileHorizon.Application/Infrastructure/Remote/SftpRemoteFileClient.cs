@@ -111,6 +111,24 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         }
     }
 
+    public Task DeleteAsync(string fullPath, CancellationToken ct)
+    {
+        if (_client is null) throw new InvalidOperationException("Client not connected");
+        try
+        {
+            _client.DeleteFile(fullPath);
+        }
+        catch (Renci.SshNet.Common.SftpPathNotFoundException)
+        {
+            // ignore missing
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete SFTP file {Path}", fullPath);
+        }
+        return Task.CompletedTask;
+    }
+
     private static bool IsDotDir(string name) => name == "." || name == "..";
 
     private static bool GlobMatch(string name, string pattern)
