@@ -18,24 +18,24 @@ public sealed class SimpleFileRouter(IOptionsMonitor<RoutingOptions> options, IL
         if (fileEvent is null) return Task.FromResult(Result<IReadOnlyList<DestinationPlan>>.Failure(Error.Validation.NullFileEvent));
 
         var rules = _options.CurrentValue.Rules;
-        foreach (var r in rules)
+        foreach (var rule in rules)
         {
-            if (!Matches(r, fileEvent)) continue;
-            if (r.Destinations.Count == 0) continue;
+            if (!Matches(rule, fileEvent)) continue;
+            if (rule.Destinations.Count == 0) continue;
 
             // Simple 1:1: pick the first destination
-            var destinationName = r.Destinations[0];
+            var destinationName = rule.Destinations[0];
             var fileName = Path.GetFileName(fileEvent.Metadata.SourcePath);
-            var renamePattern = r.RenamePattern;
+            var renamePattern = rule.RenamePattern;
             var targetName = ApplyRename(fileName, renamePattern);
             var writeOptions = new FileWriteOptions(
-                Overwrite: r.Overwrite ?? false,
+                Overwrite: rule.Overwrite ?? false,
                 ComputeHash: false,
                 RenamePattern: renamePattern);
 
             var plan = new DestinationPlan(destinationName, targetName, writeOptions);
-            _logger.LogDebug("Router matched rule {Rule} -> {Destination}", r.Name, destinationName);
-            return Task.FromResult(Result<IReadOnlyList<DestinationPlan>>.Success(new List<DestinationPlan> { plan }));
+            _logger.LogDebug("Router matched rule {Rule} -> {Destination}", rule.Name, destinationName);
+            return Task.FromResult(Result<IReadOnlyList<DestinationPlan>>.Success([plan]));
         }
 
         _logger.LogWarning("No routing rule matched for file {Id} protocol={Protocol} path={Path}", fileEvent.Id, fileEvent.Protocol, fileEvent.Metadata.SourcePath);

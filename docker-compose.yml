@@ -28,7 +28,7 @@ services:
       - LOG_CONSOLE_DEV=true
       - Logging__LogLevel__Default=Debug
       - Logging__LogLevel__Microsoft=Information
-      - Logging__LogLevel__FileHorizon=Trace
+      - Logging__LogLevel__FileHorizon=Debug
       - Pipeline__Role=Poller
       - Features__EnableFileTransfer=false
       - Features__EnableLocalPoller=true
@@ -146,27 +146,28 @@ services:
       - FileSources__Sources__1__Recursive=true
       - FileSources__Sources__1__DestinationPath=/data/outboxB
       - FileSources__Sources__1__CreateDestinationDirectories=true
-      # Destination C available for remote SFTP processed files
-      # --- Orchestrated processing (optional) ---
-      # To enable the new orchestrated pipeline (router + protocol readers + sinks), uncomment below.
-      # Keep legacy FileSources above for default behavior; these settings are safe to leave commented.
-      # - Destinations__Local__0__Name=OutboxA
-      # - Destinations__Local__0__BasePath=/data/outboxA
-      # - Destinations__Local__0__Overwrite=true
-      # - Routing__Rules__0__Match__Protocol=local
-      # - Routing__Rules__0__Match__PathPattern=^/data/inboxA/.+\\.txt$
-      # - Routing__Rules__0__Destination=OutboxA
-      # - Transfer__ChunkSizeBytes=32768
-      # - Transfer__Idempotency__Enabled=true
-      # - Transfer__Idempotency__TtlSeconds=86400
-      # Orchestrated routing to local OutboxC for any SFTP file
-      - Destinations__Local__0__Name=OutboxC
-      - Destinations__Local__0__RootPath=/data/outboxC
-      - Routing__Rules__0__Name=sftp-all
+      - Destinations__Local__0__Name=OutboxA
+      - Destinations__Local__0__RootPath=/data/outboxA
+      - Destinations__Local__1__Name=OutboxB
+      - Destinations__Local__1__RootPath=/data/outboxB
+      - Destinations__Local__2__Name=OutboxC
+      - Destinations__Local__2__RootPath=/data/outboxC
+      - Routing__Rules__0__Name=Sftp-To-OutboxC
       - Routing__Rules__0__Protocol=sftp
       - Routing__Rules__0__PathGlob=**/*.*
       - Routing__Rules__0__Destinations__0=OutboxC
       - Routing__Rules__0__Overwrite=true
+      - Routing__Rules__1__Name=InboxA-To-OutboxA
+      - Routing__Rules__1__Protocol=local
+      - Routing__Rules__1__PathGlob=**/inboxA/**
+      - Routing__Rules__1__Destinations__0=OutboxA
+      - Routing__Rules__1__Overwrite=true
+      - Routing__Rules__2__Name=InboxB-To-OutboxB
+      - Routing__Rules__2__Protocol=local
+      - Routing__Rules__2__PathGlob=**/inboxB/**
+      - Routing__Rules__2__Destinations__0=OutboxB
+      - Routing__Rules__2__Overwrite=true
+
     deploy:
       replicas: 3
     volumes:
