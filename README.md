@@ -273,6 +273,104 @@ For a deeper overview see `docs/processing-architecture.md`.
 
 ---
 
+## Service Bus Egress (File ➜ Azure Service Bus Queue/Topic)
+
+The Azure Service Bus publisher lets FileHorizon emit the full contents of a processed file as a single message to a queue or topic. (Per‑line record splitting was intentionally deferred to keep v1 scope minimal.)
+
+### Configuration (Options)
+
+Add the `ServiceBusPublisher` section to `appsettings.json` (or provide via environment variables):
+
+```json
+{
+  "ServiceBusPublisher": {
+    "ConnectionString": "Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=FileHorizonPublish;SharedAccessKey=***",
+    "MaxConcurrentPublishes": 4,
+    "EnableTracing": true
+  }
+}
+```
+
+Environment variable equivalents:
+
+```
+ServiceBusPublisher__ConnectionString=Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=FileHorizonPublish;SharedAccessKey=***
+ServiceBusPublisher__MaxConcurrentPublishes=4
+ServiceBusPublisher__EnableTracing=true
+```
+
+### Publishing a File Programmatically
+
+Below is a simplified example showing how you can publish a file (once discovered and considered ready) using the injected `IFileContentPublisher`.
+
+```csharp
+using FileHorizon.Application.Abstractions;
+using FileHorizon.Application.Models;
+using FileHorizon.Application.Common;
+
+public sealed class SimplePublishExample
+{
+  private readonly IFileContentPublisher _publisher;
+  private readonly IFileContentReader _reader;
+
+  public SimplePublishExample(IFileContentPublisher publisher, IFileContentReader reader)
+  {
+    _publisher = publisher;
+    _reader = reader;
+  }
+
+  public async Task<Result> PublishFileAsync(string fullPath, string destinationName, CancellationToken ct)
+  {
+    // Read bytes via the existing content reader abstraction.
+    var bytes = await _reader.ReadAsync(fullPath, ct);
+
+    var request = new FilePublishRequest(
+      SourcePath: Path.GetDirectoryName(fullPath)!,
+      FileName: Path.GetFileName(fullPath),
+      Content: bytes,
+      ContentType: "application/octet-stream", // or text/plain, etc.
+      DestinationName: destinationName,          // Queue or topic name
+      IsTopic: false,                            // Set true if sending to a Topic
+      ApplicationProperties: new Dictionary<string,string>
+      {
+        ["source"] = "inboxA",
+        ["env"] = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "dev"
+      }
+    );
+
+    return await _publisher.PublishAsync(request, ct);
+  }
+}
+```
+
+Notes:
+
+- The current implementation sends one message per file (whole content). No line/record splitting.
+- `IsTopic` is reserved for topic semantics; publisher treats queue vs topic uniformly at this stage.
+- `ApplicationProperties` are promoted to Service Bus application properties for downstream consumers.
+- Ensure large files fit within Service Bus message size limits (256 KB standard / 1 MB premium) — otherwise introduce a pre‑processing/chunking layer (future enhancement).
+
+### Using Environment Variables (Compose / Container)
+
+When running in containers you can supply:
+
+```
+ServiceBusPublisher__ConnectionString=Endpoint=sb://demo.servicebus.windows.net/;SharedAccessKeyName=FileHorizonPublish;SharedAccessKey=***
+```
+
+If publishing is conditional, you can wrap calls in a feature flag (future: may add `Features__EnableServiceBusEgress`). For now, simply avoid invoking the publisher when not desired.
+
+### Future Enhancements
+
+Planned extensions (tracked in Issue #14):
+
+- Optional record/line splitting via a transformation stage.
+- Retry with exponential backoff for transient publish failures.
+- Topic filters & advanced metadata (session id, scheduled enqueue time).
+- Config-driven routing rule: source path ➜ queue/topic name mapping.
+
+---
+
 ## Identity & De‑Duplication
 
 All files (local and remote) are assigned a normalized identity key:
