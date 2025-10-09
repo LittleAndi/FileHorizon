@@ -115,6 +115,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<Configuration.TransferOptions>, Configuration.TransferOptionsValidator>();
         services.AddOptions<Configuration.IdempotencyOptions>();
         services.AddOptions<Configuration.ServiceBusNotificationOptions>();
+        services.AddSingleton<IValidateOptions<Configuration.ServiceBusNotificationOptions>, Configuration.ServiceBusNotificationOptionsValidator>();
 
         // Idempotency store (choose Redis if enabled)
         services.AddSingleton<Abstractions.IIdempotencyStore>(sp =>
@@ -134,8 +135,29 @@ public static class ServiceCollectionExtensions
         // Secret resolution (dev placeholder). Host layer can replace with Key Vault implementation.
         services.AddSingleton<Abstractions.ISecretResolver, Infrastructure.Secrets.InMemorySecretResolver>();
 
-        // Phase 1: stub processed file notifier (no external dependency yet)
-        services.AddSingleton<Abstractions.IFileProcessedNotifier, Infrastructure.Notifications.StubFileProcessedNotifier>();
+        // Conditional notifier: real Service Bus when configured, else stub
+        services.AddSingleton<Abstractions.IFileProcessedNotifier>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptionsMonitor<Configuration.ServiceBusNotificationOptions>>().CurrentValue;
+            var telemetry = sp.GetRequiredService<Abstractions.IFileProcessingTelemetry>();
+            var idemp = sp.GetRequiredService<Abstractions.IIdempotencyStore>();
+            var secret = sp.GetRequiredService<Abstractions.ISecretResolver>();
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            if (opts.Enabled && opts.AuthMode == Configuration.ServiceBusAuthMode.ConnectionString && !string.IsNullOrWhiteSpace(opts.ConnectionSecretRef) && !string.IsNullOrWhiteSpace(opts.EntityName))
+            {
+                return new Infrastructure.Notifications.ServiceBusFileProcessedNotifier(
+                    sp.GetRequiredService<IOptionsMonitor<Configuration.ServiceBusNotificationOptions>>(),
+                    secret,
+                    idemp,
+                    telemetry,
+                    loggerFactory.CreateLogger<Infrastructure.Notifications.ServiceBusFileProcessedNotifier>());
+            }
+            return new Infrastructure.Notifications.StubFileProcessedNotifier(
+                sp.GetRequiredService<IOptionsMonitor<Configuration.ServiceBusNotificationOptions>>(),
+                idemp,
+                telemetry,
+                loggerFactory.CreateLogger<Infrastructure.Notifications.StubFileProcessedNotifier>());
+        });
 
         // Register concrete background service implementations as singletons (not hosted yet)
         services.AddSingleton<Infrastructure.Orchestration.FilePollingBackgroundService>();

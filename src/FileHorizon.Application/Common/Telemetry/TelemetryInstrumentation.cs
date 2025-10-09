@@ -24,7 +24,13 @@ public static class TelemetryInstrumentation
     public static readonly Counter<long> FilesDiscovered = Meter.CreateCounter<long>("files.discovered", description: "Number of files discovered by pollers");
     public static readonly Counter<long> FilesSkippedUnstable = Meter.CreateCounter<long>("files.skipped.unstable", description: "Files skipped because not yet stable");
 
+    // Notification counters
+    public static readonly Counter<long> NotificationsPublished = Meter.CreateCounter<long>("notify.published", description: "Number of processed file notifications published");
+    public static readonly Counter<long> NotificationsFailed = Meter.CreateCounter<long>("notify.failed", description: "Number of processed file notifications that failed to publish");
+    public static readonly Counter<long> NotificationsSuppressed = Meter.CreateCounter<long>("notify.suppressed", description: "Notifications suppressed due to dedupe or disabled mode");
+
     // Histograms
     public static readonly Histogram<double> ProcessingDurationMs = Meter.CreateHistogram<double>("processing.duration.ms", unit: "ms", description: "File processing duration in milliseconds");
     public static readonly Histogram<double> PollCycleDurationMs = Meter.CreateHistogram<double>("poll.cycle.duration.ms", unit: "ms", description: "Poll cycle duration in milliseconds");
+    public static readonly Histogram<double> NotificationPublishDurationMs = Meter.CreateHistogram<double>("notify.publish.duration.ms", unit: "ms", description: "Notification publish duration in milliseconds");
 }

@@ -8,4 +8,7 @@ public interface IFileProcessingTelemetry
 {
     void RecordSuccess(string protocol, double elapsedMs);
     void RecordFailure(string protocol, double elapsedMs);
+    void RecordNotificationSuccess(double elapsedMs);
+    void RecordNotificationFailure(string reason);
+    void RecordNotificationSuppressed();
 }

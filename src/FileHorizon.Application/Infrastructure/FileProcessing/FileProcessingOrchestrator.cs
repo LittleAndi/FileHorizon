@@ -24,6 +24,7 @@ public sealed class FileProcessingOrchestrator(
     IOptionsMonitor<RemoteFileSourcesOptions> remoteSources,
     Abstractions.IIdempotencyStore idempotencyStore,
     IFileProcessedNotifier notifier,
+    IFileProcessingTelemetry telemetry,
     ISftpClientFactory sftpFactory,
     ISecretResolver secretResolver,
     ILogger<SftpRemoteFileClient> sftpClientLogger,
@@ -37,6 +38,7 @@ public sealed class FileProcessingOrchestrator(
     private readonly IOptionsMonitor<IdempotencyOptions> _idempotencyOptions = idempotencyOptions;
     private readonly Abstractions.IIdempotencyStore _idempotencyStore = idempotencyStore;
     private readonly IFileProcessedNotifier _notifier = notifier;
+    private readonly IFileProcessingTelemetry _telemetry = telemetry;
     private readonly IOptionsMonitor<RemoteFileSourcesOptions> _remoteSources = remoteSources;
     private readonly ISftpClientFactory _sftpFactory = sftpFactory;
     private readonly ISecretResolver _secretResolver = secretResolver;
@@ -155,6 +157,7 @@ public sealed class FileProcessingOrchestrator(
     {
         try
         {
+            var sw = Stopwatch.StartNew();
             var notification = FileProcessedNotification.Create(
                 protocol: fileEvent.Protocol,
                 fullPath: fileEvent.Metadata.SourcePath,
@@ -179,11 +182,17 @@ public sealed class FileProcessingOrchestrator(
             if (publish.IsFailure)
             {
                 _logger.LogDebug("FileProcessedNotifier publish failure suppressed (success path): {ErrorCode}", publish.Error.Code);
+                _telemetry.RecordNotificationFailure(publish.Error.Code);
+            }
+            else
+            {
+                _telemetry.RecordNotificationSuccess(sw.Elapsed.TotalMilliseconds);
             }
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Notifier publish threw (success path suppressed)");
+            _telemetry.RecordNotificationFailure("exception");
         }
     }
 
@@ -191,6 +200,7 @@ public sealed class FileProcessingOrchestrator(
     {
         try
         {
+            var sw = Stopwatch.StartNew();
             var notification = FileProcessedNotification.Create(
                 protocol: fileEvent.Protocol,
                 fullPath: fileEvent.Metadata.SourcePath,
@@ -207,11 +217,17 @@ public sealed class FileProcessingOrchestrator(
             if (publish.IsFailure)
             {
                 _logger.LogDebug("FileProcessedNotifier publish failure suppressed (failure path): {ErrorCode}", publish.Error.Code);
+                _telemetry.RecordNotificationFailure(publish.Error.Code);
+            }
+            else
+            {
+                _telemetry.RecordNotificationSuccess(sw.Elapsed.TotalMilliseconds);
             }
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Notifier publish threw (failure path suppressed)");
+            _telemetry.RecordNotificationFailure("exception");
         }
     }
 
