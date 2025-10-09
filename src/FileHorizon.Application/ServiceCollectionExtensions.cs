@@ -153,6 +153,10 @@ public static class ServiceCollectionExtensions
             };
         });
 
+        // Service Bus publisher options (bound in host via configuration)
+        services.AddOptions<ServiceBusPublisherOptions>();
+        services.AddSingleton<Abstractions.IFileContentPublisher, Infrastructure.Messaging.ServiceBus.AzureServiceBusFileContentPublisher>();
+
         return services;
     }
 
