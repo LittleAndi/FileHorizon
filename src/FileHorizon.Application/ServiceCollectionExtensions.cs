@@ -114,6 +114,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<Configuration.TransferOptions>();
         services.AddSingleton<IValidateOptions<Configuration.TransferOptions>, Configuration.TransferOptionsValidator>();
         services.AddOptions<Configuration.IdempotencyOptions>();
+        services.AddOptions<Configuration.ServiceBusNotificationOptions>();
 
         // Idempotency store (choose Redis if enabled)
         services.AddSingleton<Abstractions.IIdempotencyStore>(sp =>
@@ -132,6 +133,9 @@ public static class ServiceCollectionExtensions
 
         // Secret resolution (dev placeholder). Host layer can replace with Key Vault implementation.
         services.AddSingleton<Abstractions.ISecretResolver, Infrastructure.Secrets.InMemorySecretResolver>();
+
+        // Phase 1: stub processed file notifier (no external dependency yet)
+        services.AddSingleton<Abstractions.IFileProcessedNotifier, Infrastructure.Notifications.StubFileProcessedNotifier>();
 
         // Register concrete background service implementations as singletons (not hosted yet)
         services.AddSingleton<Infrastructure.Orchestration.FilePollingBackgroundService>();
