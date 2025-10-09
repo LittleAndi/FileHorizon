@@ -13,32 +13,23 @@ namespace FileHorizon.Application.Infrastructure.Notifications;
 /// Real Service Bus notifier (Phase: connection string only). Handles idempotent suppression and basic retry.
 /// Future phases will add AAD/SAS auth modes and richer error classification.
 /// </summary>
-public sealed class ServiceBusFileProcessedNotifier : IFileProcessedNotifier, IAsyncDisposable
+public sealed class ServiceBusFileProcessedNotifier(
+    IOptionsMonitor<ServiceBusNotificationOptions> options,
+    ISecretResolver secretResolver,
+    IIdempotencyStore idempotencyStore,
+    IFileProcessingTelemetry telemetry,
+    ILogger<ServiceBusFileProcessedNotifier> logger) : IFileProcessedNotifier, IAsyncDisposable
 {
-    private readonly IOptionsMonitor<ServiceBusNotificationOptions> _options;
-    private readonly ISecretResolver _secretResolver;
-    private readonly IIdempotencyStore _idempotencyStore;
-    private readonly IFileProcessingTelemetry _telemetry;
-    private readonly ILogger<ServiceBusFileProcessedNotifier> _logger;
+    private readonly IOptionsMonitor<ServiceBusNotificationOptions> _options = options;
+    private readonly ISecretResolver _secretResolver = secretResolver;
+    private readonly IIdempotencyStore _idempotencyStore = idempotencyStore;
+    private readonly IFileProcessingTelemetry _telemetry = telemetry;
+    private readonly ILogger<ServiceBusFileProcessedNotifier> _logger = logger;
     private ServiceBusClient? _client;
     private ServiceBusSender? _sender;
     private readonly object _initLock = new();
     private int _consecutiveFailures;
     private DateTimeOffset? _circuitOpenedUtc;
-
-    public ServiceBusFileProcessedNotifier(
-        IOptionsMonitor<ServiceBusNotificationOptions> options,
-        ISecretResolver secretResolver,
-        IIdempotencyStore idempotencyStore,
-        IFileProcessingTelemetry telemetry,
-        ILogger<ServiceBusFileProcessedNotifier> logger)
-    {
-        _options = options;
-        _secretResolver = secretResolver;
-        _idempotencyStore = idempotencyStore;
-        _telemetry = telemetry;
-        _logger = logger;
-    }
 
     public async Task<Result> PublishAsync(FileProcessedNotification notification, CancellationToken ct)
     {
