@@ -271,6 +271,76 @@ Notes:
 
 For a deeper overview see `docs/processing-architecture.md`.
 
+### Destinations: Adding Azure Service Bus
+
+Destinations now support a Service Bus variant alongside `Local` and `Sftp`. A Service Bus destination allows routing rules to direct a file's full content into a queue or topic after it has been read. The orchestrator identifies the destination kind and invokes the `IFileContentPublisher` abstraction instead of a file sink.
+
+Configuration (`Destinations:ServiceBus`):
+
+```json
+{
+  "Destinations": {
+    "ServiceBus": [
+      {
+        "Name": "Events",
+        "EntityName": "files-events", // queue or topic name
+        "IsTopic": false,
+        "ContentType": "text/plain"
+      }
+    ]
+  },
+  "Routing": {
+    "Rules": [
+      {
+        "Name": "TxtToEvents",
+        "Protocol": "local",
+        "PathGlob": "**/*.txt",
+        "Destinations": ["Events"]
+      }
+    ]
+  }
+}
+```
+
+Environment variable equivalents (first Service Bus destination):
+
+```
+Destinations__ServiceBus__0__Name=Events
+Destinations__ServiceBus__0__EntityName=files-events
+Destinations__ServiceBus__0__IsTopic=false
+Destinations__ServiceBus__0__ContentType=text/plain
+```
+
+Routing rule notes:
+
+- The `Destinations` array in each rule lists logical destination names (e.g., `Events`). The router resolves the kind (`ServiceBus`) via the `Destinations` options.
+- Current implementation still processes only the first matching destination; multi-destination fan-out is planned.
+
+Processing flow for Service Bus destination:
+
+1. Poller emits `FileEvent` once file is stable.
+2. Router matches rule and yields a `DestinationPlan` with `Kind=ServiceBus`.
+3. Orchestrator reads the file content stream, converts to UTF-8 bytes, builds a `FilePublishRequest`.
+4. Publisher sends one message containing the entire file content.
+5. Optional source deletion executes if `DeleteAfterTransfer` is true.
+
+Size considerations:
+
+- Ensure file sizes do not exceed Azure Service Bus message limits (Standard: ~256 KB, Premium: ~1 MB). Oversized files will require future chunking logic (not yet implemented).
+- Binary files are currently treated as UTF-8 text if routed to Service Bus; define `ContentType` appropriately or avoid routing binary blobs until chunking/streaming support is added.
+
+Telemetry:
+
+- Publish operation creates an Activity (`servicebus.publish`) with tags: `messaging.system=azure.servicebus`, `messaging.destination=<EntityName>`.
+- Failures propagate as `Result.Failure` with categorized messaging errors.
+
+Future enhancements under consideration:
+
+- Retry/backoff for transient publish failures.
+- Multi-destination fan-out (e.g., local + Service Bus).
+- Session / scheduled messages.
+- Line/record splitting with transformation stage before publish.
+
 ---
 
 ## Service Bus Egress (File ➜ Azure Service Bus Queue/Topic)

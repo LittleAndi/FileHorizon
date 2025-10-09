@@ -153,9 +153,18 @@ public static class ServiceCollectionExtensions
             };
         });
 
-        // Service Bus publisher options (bound in host via configuration)
+        // Service Bus publisher options (bound in host via configuration). Conditionally register real publisher only when connection string present.
         services.AddOptions<ServiceBusPublisherOptions>();
-        services.AddSingleton<Abstractions.IFileContentPublisher, Infrastructure.Messaging.ServiceBus.AzureServiceBusFileContentPublisher>();
+        services.AddSingleton<Abstractions.IFileContentPublisher>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<ServiceBusPublisherOptions>>().Value;
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            if (string.IsNullOrWhiteSpace(opts.ConnectionString))
+            {
+                return new Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher(loggerFactory.CreateLogger<Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher>());
+            }
+            return ActivatorUtilities.CreateInstance<Infrastructure.Messaging.ServiceBus.AzureServiceBusFileContentPublisher>(sp);
+        });
 
         return services;
     }

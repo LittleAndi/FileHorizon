@@ -8,16 +8,20 @@ using System.Text.RegularExpressions;
 
 namespace FileHorizon.Application.Infrastructure.Processing;
 
-public sealed class SimpleFileRouter(IOptionsMonitor<RoutingOptions> options, ILogger<SimpleFileRouter> logger) : IFileRouter
+public sealed class SimpleFileRouter(
+    IOptionsMonitor<RoutingOptions> routingOptions,
+    IOptionsMonitor<DestinationsOptions> destinationsOptions,
+    ILogger<SimpleFileRouter> logger) : IFileRouter
 {
-    private readonly IOptionsMonitor<RoutingOptions> _options = options;
+    private readonly IOptionsMonitor<RoutingOptions> _routingOptions = routingOptions;
+    private readonly IOptionsMonitor<DestinationsOptions> _destinationsOptions = destinationsOptions;
     private readonly ILogger<SimpleFileRouter> _logger = logger;
 
     public Task<Result<IReadOnlyList<DestinationPlan>>> RouteAsync(FileEvent fileEvent, CancellationToken ct)
     {
         if (fileEvent is null) return Task.FromResult(Result<IReadOnlyList<DestinationPlan>>.Failure(Error.Validation.NullFileEvent));
 
-        var rules = _options.CurrentValue.Rules;
+        var rules = _routingOptions.CurrentValue.Rules;
         foreach (var rule in rules)
         {
             if (!Matches(rule, fileEvent)) continue;
@@ -25,6 +29,16 @@ public sealed class SimpleFileRouter(IOptionsMonitor<RoutingOptions> options, IL
 
             // Simple 1:1: pick the first destination
             var destinationName = rule.Destinations[0];
+            var kind = ResolveKind(destinationName);
+            var isTopic = false;
+            if (kind == DestinationKind.ServiceBus)
+            {
+                var sb = _destinationsOptions.CurrentValue.ServiceBus.FirstOrDefault(x => string.Equals(x.Name, destinationName, StringComparison.OrdinalIgnoreCase));
+                if (sb is not null)
+                {
+                    isTopic = sb.IsTopic;
+                }
+            }
             var fileName = Path.GetFileName(fileEvent.Metadata.SourcePath);
             var renamePattern = rule.RenamePattern;
             var targetName = ApplyRename(fileName, renamePattern);
@@ -33,13 +47,21 @@ public sealed class SimpleFileRouter(IOptionsMonitor<RoutingOptions> options, IL
                 ComputeHash: false,
                 RenamePattern: renamePattern);
 
-            var plan = new DestinationPlan(destinationName, targetName, writeOptions);
+            var plan = new DestinationPlan(destinationName, targetName, writeOptions, kind, isTopic);
             _logger.LogDebug("Router matched rule {Rule} -> {Destination}", rule.Name, destinationName);
             return Task.FromResult(Result<IReadOnlyList<DestinationPlan>>.Success([plan]));
         }
 
         _logger.LogWarning("No routing rule matched for file {Id} protocol={Protocol} path={Path}", fileEvent.Id, fileEvent.Protocol, fileEvent.Metadata.SourcePath);
         return Task.FromResult(Result<IReadOnlyList<DestinationPlan>>.Failure(Error.Validation.Invalid("No routing rule matched")));
+    }
+
+    private DestinationKind ResolveKind(string destinationName)
+    {
+        if (_destinationsOptions.CurrentValue.Local.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.Local;
+        if (_destinationsOptions.CurrentValue.Sftp.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.Sftp;
+        if (_destinationsOptions.CurrentValue.ServiceBus.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.ServiceBus;
+        return DestinationKind.Local; // default fallback
     }
 
     private static bool Matches(RoutingRuleOptions r, FileEvent ev)

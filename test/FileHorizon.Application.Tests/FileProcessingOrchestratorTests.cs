@@ -1,4 +1,5 @@
 using FileHorizon.Application.Abstractions;
+using FileHorizon.Application.Common;
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Infrastructure.FileProcessing;
 using FileHorizon.Application.Models;
@@ -50,7 +51,11 @@ public class FileProcessingOrchestratorTests
                 }
             ]
         };
-        var router = new Infrastructure.Processing.SimpleFileRouter(new StaticOptionsMonitor<RoutingOptions>(routing), NullLogger<Infrastructure.Processing.SimpleFileRouter>.Instance);
+        var router = new Infrastructure.Processing.SimpleFileRouter(
+            routingOptions: new StaticOptionsMonitor<RoutingOptions>(routing),
+            destinationsOptions: new StaticOptionsMonitor<DestinationsOptions>(new DestinationsOptions()),
+            logger: NullLogger<Infrastructure.Processing.SimpleFileRouter>.Instance
+        );
 
         var readers = new List<IFileContentReader> { new Infrastructure.Processing.LocalFileContentReader(NullLogger<Infrastructure.Processing.LocalFileContentReader>.Instance) };
         var sinks = new List<IFileSink> { new Infrastructure.Processing.LocalFileSink(NullLogger<Infrastructure.Processing.LocalFileSink>.Instance) };
@@ -62,19 +67,23 @@ public class FileProcessingOrchestratorTests
             ]
         };
         var remoteSources = new RemoteFileSourcesOptions();
+        var publisher = new FakePublisher();
+
         var orchestrator = new FileProcessingOrchestrator(
-            router,
-            readers,
-            sinks,
-            new StaticOptionsMonitor<DestinationsOptions>(destinations),
-            new StaticOptionsMonitor<IdempotencyOptions>(new IdempotencyOptions { Enabled = false }),
-            new StaticOptionsMonitor<RemoteFileSourcesOptions>(remoteSources),
-            new Infrastructure.Idempotency.InMemoryIdempotencyStore(),
-            new Infrastructure.Remote.SshNetSftpClientFactory(NullLogger<Infrastructure.Remote.SshNetSftpClientFactory>.Instance),
-            new Infrastructure.Secrets.InMemorySecretResolver(NullLogger<Infrastructure.Secrets.InMemorySecretResolver>.Instance),
-            NullLogger<Infrastructure.Remote.SftpRemoteFileClient>.Instance,
-            NullLogger<Infrastructure.Remote.FtpRemoteFileClient>.Instance,
-            NullLogger<FileProcessingOrchestrator>.Instance);
+            router: router,
+            readers: readers,
+            sinks: sinks,
+            destinations: new StaticOptionsMonitor<DestinationsOptions>(destinations),
+            idempotencyOptions: new StaticOptionsMonitor<IdempotencyOptions>(new IdempotencyOptions { Enabled = false }),
+            remoteSources: new StaticOptionsMonitor<RemoteFileSourcesOptions>(remoteSources),
+            idempotencyStore: new Infrastructure.Idempotency.InMemoryIdempotencyStore(),
+            sftpFactory: new Infrastructure.Remote.SshNetSftpClientFactory(NullLogger<Infrastructure.Remote.SshNetSftpClientFactory>.Instance),
+            secretResolver: new Infrastructure.Secrets.InMemorySecretResolver(NullLogger<Infrastructure.Secrets.InMemorySecretResolver>.Instance),
+            sftpClientLogger: NullLogger<Infrastructure.Remote.SftpRemoteFileClient>.Instance,
+            ftpClientLogger: NullLogger<Infrastructure.Remote.FtpRemoteFileClient>.Instance,
+            publisher: publisher,
+            logger: NullLogger<FileProcessingOrchestrator>.Instance
+        );
 
         var res = await orchestrator.ProcessAsync(ev, CancellationToken.None);
         Assert.True(res.IsSuccess);
@@ -85,5 +94,17 @@ public class FileProcessingOrchestratorTests
         // Cleanup
         try { File.Delete(srcFile); } catch { }
         try { Directory.Delete(destRoot, true); } catch { }
+    }
+
+    private sealed class FakePublisher : IFileContentPublisher
+    {
+        public bool Called { get; private set; }
+        public FilePublishRequest? LastRequest { get; private set; }
+        public Task<Result> PublishAsync(FilePublishRequest request, CancellationToken ct)
+        {
+            Called = true;
+            LastRequest = request;
+            return Task.FromResult(Result.Success());
+        }
     }
 }

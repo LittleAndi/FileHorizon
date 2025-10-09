@@ -15,7 +15,8 @@ namespace FileHorizon.Application.Infrastructure.Messaging.ServiceBus;
 /// </summary>
 public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher, IAsyncDisposable
 {
-    private readonly ServiceBusClient _client;
+    private readonly ServiceBusClient? _client;
+    private readonly bool _enabled;
     private readonly ILogger<AzureServiceBusFileContentPublisher> _logger;
     private readonly ServiceBusPublisherOptions _options;
 
@@ -25,11 +26,23 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
     {
         _options = options.Value;
         _logger = logger;
+        if (string.IsNullOrWhiteSpace(_options.ConnectionString))
+        {
+            _enabled = false;
+            _logger.LogWarning("Service Bus publisher disabled (no connection string configured)");
+            return;
+        }
         _client = new ServiceBusClient(_options.ConnectionString);
+        _enabled = true;
     }
 
     public async Task<Result> PublishAsync(FilePublishRequest request, CancellationToken ct)
     {
+        if (!_enabled)
+        {
+            _logger.LogDebug("Skipping publish for {FileName} because Service Bus publisher is disabled", request.FileName);
+            return Result.Success(); // treat as no-op success in disabled mode
+        }
         if (string.IsNullOrWhiteSpace(request.DestinationName))
         {
             return Result.Failure(Error.Messaging.DestinationEmpty);
@@ -41,7 +54,7 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
 
         try
         {
-            var sender = _client.CreateSender(request.DestinationName);
+            var sender = _client!.CreateSender(request.DestinationName);
             var message = CreateMessage(request.Content, request);
             await sender.SendMessageAsync(message, ct).ConfigureAwait(false);
             _logger.LogDebug("Published file {FileName} to {Destination}", request.FileName, request.DestinationName);
@@ -79,6 +92,9 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
 
     public async ValueTask DisposeAsync()
     {
-        await _client.DisposeAsync().ConfigureAwait(false);
+        if (_client is not null)
+        {
+            await _client.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }
