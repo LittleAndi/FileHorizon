@@ -4,6 +4,7 @@ using FileHorizon.Application.Common.Telemetry;
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Infrastructure.Remote;
 using FileHorizon.Application.Models;
+using FileHorizon.Application.Models.Notifications;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
@@ -22,6 +23,7 @@ public sealed class FileProcessingOrchestrator(
     IOptionsMonitor<IdempotencyOptions> idempotencyOptions,
     IOptionsMonitor<RemoteFileSourcesOptions> remoteSources,
     Abstractions.IIdempotencyStore idempotencyStore,
+    IFileProcessedNotifier notifier,
     ISftpClientFactory sftpFactory,
     ISecretResolver secretResolver,
     ILogger<SftpRemoteFileClient> sftpClientLogger,
@@ -34,6 +36,7 @@ public sealed class FileProcessingOrchestrator(
     private readonly IOptionsMonitor<DestinationsOptions> _destinations = destinations;
     private readonly IOptionsMonitor<IdempotencyOptions> _idempotencyOptions = idempotencyOptions;
     private readonly Abstractions.IIdempotencyStore _idempotencyStore = idempotencyStore;
+    private readonly IFileProcessedNotifier _notifier = notifier;
     private readonly IOptionsMonitor<RemoteFileSourcesOptions> _remoteSources = remoteSources;
     private readonly ISftpClientFactory _sftpFactory = sftpFactory;
     private readonly ISecretResolver _secretResolver = secretResolver;
@@ -43,6 +46,7 @@ public sealed class FileProcessingOrchestrator(
 
     public async Task<Result> ProcessAsync(FileEvent fileEvent, CancellationToken ct)
     {
+        var overallSw = Stopwatch.StartNew();
         using var activity = TelemetryInstrumentation.ActivitySource.StartActivity("file.orchestrate", ActivityKind.Internal);
         activity?.SetTag("file.protocol", fileEvent.Protocol);
         activity?.SetTag("file.source_path", fileEvent.Metadata.SourcePath);
@@ -65,6 +69,7 @@ public sealed class FileProcessingOrchestrator(
         var route = await _router.RouteAsync(fileEvent, ct).ConfigureAwait(false);
         if (route.IsFailure)
         {
+            await PublishFailureAsync(fileEvent, ProcessingStatus.Failure, route.Error, overallSw.Elapsed, ct).ConfigureAwait(false);
             return Result.Failure(route.Error);
         }
         var plans = route.Value!;
@@ -80,22 +85,28 @@ public sealed class FileProcessingOrchestrator(
         var destRoot = ResolveLocalDestinationRoot(plan.DestinationName);
         if (destRoot is null)
         {
+            var err = Error.Validation.Invalid($"Unknown destination '{plan.DestinationName}'");
             _logger.LogWarning("Unknown destination {Dest}", plan.DestinationName);
-            return Result.Failure(Error.Validation.Invalid($"Unknown destination '{plan.DestinationName}'"));
+            await PublishFailureAsync(fileEvent, ProcessingStatus.Failure, err, overallSw.Elapsed, ct).ConfigureAwait(false);
+            return Result.Failure(err);
         }
 
         // Select reader based on protocol
         var reader = SelectReader(fileEvent.Protocol);
         if (reader is null)
         {
-            return Result.Failure(Error.Validation.Invalid($"No reader for protocol '{fileEvent.Protocol}'"));
+            var err = Error.Validation.Invalid($"No reader for protocol '{fileEvent.Protocol}'");
+            await PublishFailureAsync(fileEvent, ProcessingStatus.Failure, err, overallSw.Elapsed, ct).ConfigureAwait(false);
+            return Result.Failure(err);
         }
 
         // For now, we only support local sink
         var sink = _sinks.FirstOrDefault(s => string.Equals(s.Name, "Local", StringComparison.OrdinalIgnoreCase));
         if (sink is null)
         {
-            return Result.Failure(Error.Unspecified("Sink.LocalMissing", "Local sink not registered"));
+            var err = Error.Unspecified("Sink.LocalMissing", "Local sink not registered");
+            await PublishFailureAsync(fileEvent, ProcessingStatus.Failure, err, overallSw.Elapsed, ct).ConfigureAwait(false);
+            return Result.Failure(err);
         }
 
         var sourceRef = new FileReference(
@@ -122,6 +133,7 @@ public sealed class FileProcessingOrchestrator(
         }
         if (open.IsFailure)
         {
+            await PublishFailureAsync(fileEvent, ProcessingStatus.Failure, open.Error, overallSw.Elapsed, ct).ConfigureAwait(false);
             return Result.Failure(open.Error);
         }
 
@@ -129,11 +141,78 @@ public sealed class FileProcessingOrchestrator(
         var write = await sink.WriteAsync(targetRef, stream, plan.Options, ct).ConfigureAwait(false);
         if (write.IsFailure)
         {
+            await PublishFailureAsync(fileEvent, ProcessingStatus.Failure, write.Error, overallSw.Elapsed, ct).ConfigureAwait(false);
             return write; // propagate
         }
         // Source deletion (local or remote) if event requests it
         await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
+        var duration = overallSw.Elapsed;
+        await PublishSuccessAsync(fileEvent, plan, duration, ct).ConfigureAwait(false);
         return Result.Success();
+    }
+
+    private async Task PublishSuccessAsync(FileEvent fileEvent, DestinationPlan plan, TimeSpan duration, CancellationToken ct)
+    {
+        try
+        {
+            var notification = FileProcessedNotification.Create(
+                protocol: fileEvent.Protocol,
+                fullPath: fileEvent.Metadata.SourcePath,
+                sizeBytes: fileEvent.Metadata.SizeBytes,
+                lastModifiedUtc: fileEvent.Metadata.LastModifiedUtc,
+                status: ProcessingStatus.Success,
+                processingDuration: duration,
+                idempotencyKey: fileEvent.Id,
+                correlationId: fileEvent.Id,
+                completedUtc: DateTimeOffset.UtcNow,
+                destinations: new List<DestinationResult>
+                {
+                    new(
+                        DestinationType: "local",
+                        DestinationIdentifier: plan.DestinationName,
+                        Success: true,
+                        BytesWritten: fileEvent.Metadata.SizeBytes,
+                        Latency: null)
+                }
+            );
+            var publish = await _notifier.PublishAsync(notification, ct).ConfigureAwait(false);
+            if (publish.IsFailure)
+            {
+                _logger.LogDebug("FileProcessedNotifier publish failure suppressed (success path): {ErrorCode}", publish.Error.Code);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Notifier publish threw (success path suppressed)");
+        }
+    }
+
+    private async Task PublishFailureAsync(FileEvent fileEvent, ProcessingStatus status, Error error, TimeSpan duration, CancellationToken ct)
+    {
+        try
+        {
+            var notification = FileProcessedNotification.Create(
+                protocol: fileEvent.Protocol,
+                fullPath: fileEvent.Metadata.SourcePath,
+                sizeBytes: fileEvent.Metadata.SizeBytes,
+                lastModifiedUtc: fileEvent.Metadata.LastModifiedUtc,
+                status: status,
+                processingDuration: duration,
+                idempotencyKey: fileEvent.Id,
+                correlationId: fileEvent.Id,
+                completedUtc: DateTimeOffset.UtcNow,
+                destinations: new List<DestinationResult>() // no destinations succeeded
+            );
+            var publish = await _notifier.PublishAsync(notification, ct).ConfigureAwait(false);
+            if (publish.IsFailure)
+            {
+                _logger.LogDebug("FileProcessedNotifier publish failure suppressed (failure path): {ErrorCode}", publish.Error.Code);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Notifier publish threw (failure path suppressed)");
+        }
     }
 
     private IFileContentReader? SelectReader(string protocol)
