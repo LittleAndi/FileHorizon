@@ -28,6 +28,9 @@ public sealed class FileProcessingServiceTelemetryTests
             FailureCount++;
             DurationsMs.Add(elapsedMs);
         }
+        public void RecordNotificationSuccess(double elapsedMs) { }
+        public void RecordNotificationFailure(string reason) { }
+        public void RecordNotificationSuppressed() { }
     }
     private sealed class SuccessProcessor : IFileProcessor
     {

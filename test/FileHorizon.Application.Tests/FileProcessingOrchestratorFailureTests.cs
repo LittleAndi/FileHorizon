@@ -69,6 +69,13 @@ public class FileProcessingOrchestratorFailureTests
             new StaticOptionsMonitor<IdempotencyOptions>(new IdempotencyOptions { Enabled = false }),
             new StaticOptionsMonitor<RemoteFileSourcesOptions>(remoteSources),
             new Infrastructure.Idempotency.InMemoryIdempotencyStore(),
+            new Infrastructure.Notifications.StubFileProcessedNotifier(
+                options: new StaticOptionsMonitor<ServiceBusNotificationOptions>(new ServiceBusNotificationOptions { Enabled = false }),
+                idempotencyStore: new Infrastructure.Idempotency.InMemoryIdempotencyStore(),
+                telemetry: new Infrastructure.Telemetry.FileProcessingTelemetry(),
+                logger: NullLogger<Infrastructure.Notifications.StubFileProcessedNotifier>.Instance
+            ),
+            new Infrastructure.Telemetry.FileProcessingTelemetry(),
             new Infrastructure.Remote.SshNetSftpClientFactory(NullLogger<Infrastructure.Remote.SshNetSftpClientFactory>.Instance),
             new Infrastructure.Secrets.InMemorySecretResolver(NullLogger<Infrastructure.Secrets.InMemorySecretResolver>.Instance),
             NullLogger<Infrastructure.Remote.SftpRemoteFileClient>.Instance,

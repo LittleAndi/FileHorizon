@@ -13,6 +13,9 @@ public class FileProcessingServiceTests
         public int Success; public int Failure; public List<double> Durations = new();
         public void RecordSuccess(string protocol, double elapsedMs) { Success++; Durations.Add(elapsedMs); }
         public void RecordFailure(string protocol, double elapsedMs) { Failure++; Durations.Add(elapsedMs); }
+        public void RecordNotificationSuccess(double elapsedMs) { }
+        public void RecordNotificationFailure(string reason) { }
+        public void RecordNotificationSuppressed() { }
     }
     private sealed class TestFileProcessor : IFileProcessor
     {

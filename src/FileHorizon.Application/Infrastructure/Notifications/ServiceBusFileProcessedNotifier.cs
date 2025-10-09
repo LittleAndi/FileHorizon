@@ -23,6 +23,8 @@ public sealed class ServiceBusFileProcessedNotifier : IFileProcessedNotifier, IA
     private ServiceBusClient? _client;
     private ServiceBusSender? _sender;
     private readonly object _initLock = new();
+    private int _consecutiveFailures;
+    private DateTimeOffset? _circuitOpenedUtc;
 
     public ServiceBusFileProcessedNotifier(
         IOptionsMonitor<ServiceBusNotificationOptions> options,
@@ -45,6 +47,14 @@ public sealed class ServiceBusFileProcessedNotifier : IFileProcessedNotifier, IA
         {
             _telemetry.RecordNotificationSuppressed();
             return Result.Success();
+        }
+
+        // Circuit breaker short-circuit check
+        if (opts.CircuitBreakerEnabled && IsCircuitOpen(opts))
+        {
+            _telemetry.RecordNotificationFailure("circuit.open");
+            _logger.LogWarning("Circuit breaker OPEN - skipping publish. OpenedAt={OpenedAt:o}", _circuitOpenedUtc);
+            return Result.Failure(Error.Unspecified("Notify.CircuitOpen", "Notification circuit breaker open"));
         }
         if (opts.AuthMode != ServiceBusAuthMode.ConnectionString)
         {
@@ -101,26 +111,35 @@ public sealed class ServiceBusFileProcessedNotifier : IFileProcessedNotifier, IA
                 timeoutCts.CancelAfter(TimeSpan.FromSeconds(opts.PublishTimeoutSeconds));
                 await _sender.SendMessageAsync(message, timeoutCts.Token).ConfigureAwait(false);
                 _telemetry.RecordNotificationSuccess(0); // duration captured at orchestrator level; here we just count
+                // Success resets failure counters & circuit state
+                _consecutiveFailures = 0;
+                _circuitOpenedUtc = null;
                 return Result.Success();
-            }
-            catch (ServiceBusException sbEx) when (sbEx.IsTransient && attempt < maxAttempts)
-            {
-                _logger.LogWarning(sbEx, "Transient ServiceBus publish failure attempt {Attempt}/{Max}", attempt, maxAttempts);
-                var delay = ComputeDelay(baseMs, attempt, maxMs, opts.EnableJitter);
-                await Task.Delay(delay, ct).ConfigureAwait(false);
-                continue;
             }
             catch (Exception ex)
             {
-                if (attempt < maxAttempts)
+                var transient = IsTransient(ex);
+                var shouldRetry = transient && attempt < maxAttempts;
+
+                if (shouldRetry)
                 {
-                    _logger.LogWarning(ex, "ServiceBus publish failure attempt {Attempt}/{Max}", attempt, maxAttempts);
+                    _logger.LogWarning(ex, "Transient publish failure attempt {Attempt}/{Max}", attempt, maxAttempts);
                     var delay = ComputeDelay(baseMs, attempt, maxMs, opts.EnableJitter);
                     await Task.Delay(delay, ct).ConfigureAwait(false);
                     continue;
                 }
-                _telemetry.RecordNotificationFailure("publish.error");
-                _logger.LogError(ex, "ServiceBus publish failed after {Attempts} attempts", attempt);
+
+                _consecutiveFailures++;
+                _logger.LogError(ex, "ServiceBus publish failed. Attempt={Attempt} Transient={Transient} ConsecutiveFailures={Failures}", attempt, transient, _consecutiveFailures);
+                var reason = transient ? "publish.error.transient.maxretries" : "publish.error.terminal";
+                _telemetry.RecordNotificationFailure(reason);
+
+                if (opts.CircuitBreakerEnabled && _consecutiveFailures >= opts.CircuitBreakerFailureThreshold)
+                {
+                    _circuitOpenedUtc = DateTimeOffset.UtcNow;
+                    _logger.LogWarning("Circuit breaker OPENED after {Failures} consecutive failures", _consecutiveFailures);
+                }
+
                 return Result.Failure(Error.Unspecified("Notify.PublishFailed", ex.Message));
             }
         }
@@ -145,6 +164,32 @@ public sealed class ServiceBusFileProcessedNotifier : IFileProcessedNotifier, IA
             _client = new ServiceBusClient(conn);
             _sender = _client.CreateSender(opts.EntityName!);
         }
+    }
+
+    private bool IsCircuitOpen(ServiceBusNotificationOptions opts)
+    {
+        if (_circuitOpenedUtc is null) return false;
+        var resetAfter = _circuitOpenedUtc.Value.AddSeconds(opts.CircuitBreakerResetSeconds);
+        if (DateTimeOffset.UtcNow >= resetAfter)
+        {
+            // Half-open: allow a trial attempt; reset counters
+            _consecutiveFailures = 0;
+            _circuitOpenedUtc = null;
+            return false;
+        }
+        return true;
+    }
+
+    private static bool IsTransient(Exception ex)
+    {
+        return ex switch
+        {
+            ServiceBusException sb when sb.IsTransient => true,
+            TimeoutException => true,
+            TaskCanceledException => true,
+            OperationCanceledException => true,
+            _ => false
+        };
     }
 
     public async ValueTask DisposeAsync()

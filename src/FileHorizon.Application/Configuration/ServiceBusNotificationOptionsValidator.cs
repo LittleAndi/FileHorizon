@@ -39,6 +39,11 @@ public sealed class ServiceBusNotificationOptionsValidator : IValidateOptions<Se
         if (options.MaxRetryDelayMs < options.BaseRetryDelayMs) failures.Add("MaxRetryDelayMs must be >= BaseRetryDelayMs");
         if (options.PublishTimeoutSeconds <= 0) failures.Add("PublishTimeoutSeconds must be > 0");
         if (options.IdempotencyTtlMinutes <= 0) failures.Add("IdempotencyTtlMinutes must be > 0");
+        if (options.CircuitBreakerEnabled)
+        {
+            if (options.CircuitBreakerFailureThreshold <= 0) failures.Add("CircuitBreakerFailureThreshold must be > 0 when enabled");
+            if (options.CircuitBreakerResetSeconds <= 0) failures.Add("CircuitBreakerResetSeconds must be > 0 when enabled");
+        }
 
         return failures.Count == 0
             ? ValidateOptionsResult.Success

@@ -22,6 +22,9 @@ public sealed class ServiceBusNotificationOptions
     public int PublishTimeoutSeconds { get; set; } = 30; // per publish op timeout
     public bool LogFullPaths { get; set; } = true; // optional path redaction future
     public int IdempotencyTtlMinutes { get; set; } = 10; // suppression TTL
+    public bool CircuitBreakerEnabled { get; set; } = true; // enable short-circuit after repeated failures
+    public int CircuitBreakerFailureThreshold { get; set; } = 10; // consecutive failures before opening
+    public int CircuitBreakerResetSeconds { get; set; } = 120; // time window before attempts after open
 }
 
 public enum ServiceBusAuthMode
