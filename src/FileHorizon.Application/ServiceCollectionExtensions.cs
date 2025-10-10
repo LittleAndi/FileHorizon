@@ -107,6 +107,8 @@ public static class ServiceCollectionExtensions
         services.AddOptions<PipelineFeaturesOptions>();
         services.AddOptions<Configuration.RemoteFileSourcesOptions>();
         services.AddSingleton<IValidateOptions<Configuration.RemoteFileSourcesOptions>, Configuration.RemoteFileSourcesOptionsValidator>();
+        services.AddOptions<Configuration.FileSourcesOptions>();
+        services.AddSingleton<IValidateOptions<Configuration.FileSourcesOptions>, Configuration.FileSourcesOptionsValidator>();
         services.AddOptions<Configuration.DestinationsOptions>();
         services.AddSingleton<IValidateOptions<Configuration.DestinationsOptions>, Configuration.DestinationsOptionsValidator>();
         services.AddOptions<Configuration.RoutingOptions>();

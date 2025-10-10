@@ -43,6 +43,10 @@ public sealed class RemoteFileSourcesOptionsValidator : IValidateOptions<RemoteF
             {
                 errors.Add($"{prefix}: RemotePath must be specified.");
             }
+            else if (!Common.PathValidator.IsValidRemotePath(remotePath, out var rpError))
+            {
+                errors.Add($"{prefix}: RemotePath invalid: {rpError}");
+            }
             if (string.IsNullOrWhiteSpace(pattern))
             {
                 errors.Add($"{prefix}: Pattern must be specified.");

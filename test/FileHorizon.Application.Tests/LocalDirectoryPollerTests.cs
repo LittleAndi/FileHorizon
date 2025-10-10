@@ -80,10 +80,8 @@ public class LocalDirectoryPollerTests
                 break;
             }
             Assert.NotNull(first);
-            // Local identity now normalized to forward-slash absolute path starting with '/'
-            var normalized = filePath.Replace("\\", "/");
-            if (!normalized.StartsWith('/')) normalized = "/" + normalized;
-            Assert.Equal(normalized, first!.Metadata.SourcePath);
+            // Local identity should now be the original OS path (no forced normalization)
+            Assert.Equal(filePath, first!.Metadata.SourcePath);
         }
         finally
         {
