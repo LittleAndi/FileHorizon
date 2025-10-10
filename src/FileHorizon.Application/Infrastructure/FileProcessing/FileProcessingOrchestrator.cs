@@ -52,56 +52,26 @@ public sealed class FileProcessingOrchestrator(
         activity?.SetTag("file.source_path", fileEvent.Metadata.SourcePath);
 
         // Idempotency check (optional)
-        var idemp = _idempotencyOptions.CurrentValue;
-        if (idemp.Enabled)
+        var idempotencyGate = await EnsureFirstProcessingAsync(fileEvent, ct).ConfigureAwait(false);
+        if (idempotencyGate.IsFailure || !idempotencyGate.Value)
         {
-            var key = $"file:{fileEvent.Id}";
-            var ttl = TimeSpan.FromSeconds(Math.Max(1, idemp.TtlSeconds));
-            var first = await _idempotencyStore.TryMarkProcessedAsync(key, ttl, ct).ConfigureAwait(false);
-            if (!first)
-            {
-                _logger.LogInformation("Skipping already-processed file event {Id}", fileEvent.Id);
-                return Result.Success();
-            }
+            return idempotencyGate.IsFailure ? Result.Failure(idempotencyGate.Error) : Result.Success();
         }
 
-        // Route to destinations
-        var route = await _router.RouteAsync(fileEvent, ct).ConfigureAwait(false);
-        if (route.IsFailure)
+        // Route to destinations (currently handle single destination only)
+        var planResult = await GetFirstDestinationPlanAsync(fileEvent, ct).ConfigureAwait(false);
+        if (planResult.IsFailure)
         {
-            return Result.Failure(route.Error);
+            return Result.Failure(planResult.Error);
         }
-        var plans = route.Value!;
-        if (plans.Count == 0)
+        if (planResult.Value is null)
         {
             return Result.Success(); // nothing to do
         }
+        var plan = planResult.Value;
 
-        // First cut: handle single destination only
-        var plan = plans[0];
-
-        // Select reader based on protocol
-        var reader = SelectReader(fileEvent.Protocol);
-        if (reader is null)
-        {
-            return Result.Failure(Error.Validation.Invalid($"No reader for protocol '{fileEvent.Protocol}'"));
-        }
-
-        var sourceRef = new FileReference(
-            Scheme: fileEvent.Protocol,
-            Host: null,
-            Port: null,
-            Path: fileEvent.Metadata.SourcePath,
-            SourceName: null);
-
-        // Open stream
-        Result<Stream> open;
-        using (var readActivity = TelemetryInstrumentation.ActivitySource.StartActivity("reader.open", ActivityKind.Internal))
-        {
-            readActivity?.SetTag("file.protocol", fileEvent.Protocol);
-            readActivity?.SetTag("file.source_path", sourceRef.Path);
-            open = await reader.OpenReadAsync(sourceRef, ct).ConfigureAwait(false);
-        }
+        // Open source stream via helper
+        var open = await OpenSourceStreamAsync(fileEvent, ct).ConfigureAwait(false);
         if (open.IsFailure)
         {
             return Result.Failure(open.Error);
@@ -220,6 +190,82 @@ public sealed class FileProcessingOrchestrator(
             return Result.Failure(Error.Unspecified("Destination.SftpUnsupported", "Sftp destination handling not implemented"));
         }
         return Result.Failure(Error.Unspecified("Destination.UnknownKind", $"Unhandled destination kind {plan.Kind}"));
+    }
+
+    /// <summary>
+    /// Selects appropriate reader for the event protocol and opens the source stream.
+    /// </summary>
+    private async Task<Result<Stream>> OpenSourceStreamAsync(FileEvent fileEvent, CancellationToken ct)
+    {
+        var reader = SelectReader(fileEvent.Protocol);
+        if (reader is null)
+        {
+            return Result<Stream>.Failure(Error.Validation.Invalid($"No reader for protocol '{fileEvent.Protocol}'"));
+        }
+
+        var sourceRef = new FileReference(
+            Scheme: fileEvent.Protocol,
+            Host: null,
+            Port: null,
+            Path: fileEvent.Metadata.SourcePath,
+            SourceName: null);
+
+        using var readActivity = TelemetryInstrumentation.ActivitySource.StartActivity("reader.open", ActivityKind.Internal);
+        readActivity?.SetTag("file.protocol", fileEvent.Protocol);
+        readActivity?.SetTag("file.source_path", sourceRef.Path);
+        var open = await reader.OpenReadAsync(sourceRef, ct).ConfigureAwait(false);
+        return open;
+    }
+
+    /// <summary>
+    /// Routes the file event and returns the first destination plan if any, or null when there are no plans.
+    /// </summary>
+    private async Task<Result<DestinationPlan?>> GetFirstDestinationPlanAsync(FileEvent fileEvent, CancellationToken ct)
+    {
+        var route = await _router.RouteAsync(fileEvent, ct).ConfigureAwait(false);
+        if (route.IsFailure)
+        {
+            return Result<DestinationPlan?>.Failure(route.Error);
+        }
+        var plans = route.Value!;
+        if (plans.Count == 0)
+        {
+            return Result<DestinationPlan?>.Success(null);
+        }
+        return Result<DestinationPlan?>.Success(plans[0]);
+    }
+
+    /// <summary>
+    /// Applies idempotency guarding. Returns Result.Success(true) when processing should continue,
+    /// Result.Success(false) when the event was already processed (and should be skipped), or a failure result
+    /// if marking the event failed unexpectedly.
+    /// </summary>
+    private async Task<Result<bool>> EnsureFirstProcessingAsync(FileEvent fileEvent, CancellationToken ct)
+    {
+        var idemp = _idempotencyOptions.CurrentValue;
+        if (!idemp.Enabled)
+        {
+            return Result<bool>.Success(true);
+        }
+
+        try
+        {
+            var key = $"file:{fileEvent.Id}";
+            var ttl = TimeSpan.FromSeconds(Math.Max(1, idemp.TtlSeconds));
+            var first = await _idempotencyStore.TryMarkProcessedAsync(key, ttl, ct).ConfigureAwait(false);
+            if (!first)
+            {
+                _logger.LogInformation("Skipping already-processed file event {Id}", fileEvent.Id);
+                return Result<bool>.Success(false);
+            }
+            return Result<bool>.Success(true);
+        }
+        catch (Exception ex)
+        {
+            // Treat unexpected exception as failure so caller can decide policy (currently propagate failure)
+            _logger.LogError(ex, "Idempotency mark failed for file event {Id}", fileEvent.Id);
+            return Result<bool>.Failure(Error.Unspecified("Idempotency.MarkFailed", ex.Message));
+        }
     }
 
     private IFileContentReader? SelectReader(string protocol)
