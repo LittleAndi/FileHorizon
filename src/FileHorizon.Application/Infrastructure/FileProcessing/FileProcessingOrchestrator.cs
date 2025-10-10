@@ -21,13 +21,13 @@ public sealed class FileProcessingOrchestrator(
     IOptionsMonitor<DestinationsOptions> destinations,
     IOptionsMonitor<IdempotencyOptions> idempotencyOptions,
     IOptionsMonitor<RemoteFileSourcesOptions> remoteSources,
-    Abstractions.IIdempotencyStore idempotencyStore,
+    IIdempotencyStore idempotencyStore,
     ISftpClientFactory sftpFactory,
     ISecretResolver secretResolver,
     ILogger<SftpRemoteFileClient> sftpClientLogger,
     ILogger<FtpRemoteFileClient> ftpClientLogger,
-    Abstractions.IFileContentPublisher publisher,
-    Abstractions.IFileTypeDetector fileTypeDetector,
+    IFileContentPublisher publisher,
+    IFileTypeDetector fileTypeDetector,
     ILogger<FileProcessingOrchestrator> logger) : IFileProcessor
 {
     private readonly IFileRouter _router = router;
@@ -35,15 +35,15 @@ public sealed class FileProcessingOrchestrator(
     private readonly IEnumerable<IFileSink> _sinks = sinks;
     private readonly IOptionsMonitor<DestinationsOptions> _destinations = destinations;
     private readonly IOptionsMonitor<IdempotencyOptions> _idempotencyOptions = idempotencyOptions;
-    private readonly Abstractions.IIdempotencyStore _idempotencyStore = idempotencyStore;
+    private readonly IIdempotencyStore _idempotencyStore = idempotencyStore;
     private readonly IOptionsMonitor<RemoteFileSourcesOptions> _remoteSources = remoteSources;
     private readonly ISftpClientFactory _sftpFactory = sftpFactory;
     private readonly ISecretResolver _secretResolver = secretResolver;
     private readonly ILogger<SftpRemoteFileClient> sftpClientLogger = sftpClientLogger;
     private readonly ILogger<FtpRemoteFileClient> ftpClientLogger = ftpClientLogger;
     private readonly ILogger<FileProcessingOrchestrator> _logger = logger;
-    private readonly Abstractions.IFileContentPublisher _publisher = publisher;
-    private readonly Abstractions.IFileTypeDetector _fileTypeDetector = fileTypeDetector;
+    private readonly IFileContentPublisher _publisher = publisher;
+    private readonly IFileTypeDetector _fileTypeDetector = fileTypeDetector;
 
     public async Task<Result> ProcessAsync(FileEvent fileEvent, CancellationToken ct)
     {
@@ -113,22 +113,47 @@ public sealed class FileProcessingOrchestrator(
             using var publishActivity = TelemetryInstrumentation.ActivitySource.StartActivity("servicebus.publish", ActivityKind.Producer);
             publishActivity?.SetTag("messaging.system", "azure.servicebus");
             publishActivity?.SetTag("messaging.destination", plan.DestinationName);
-            // Read entire content as raw bytes (binary-safe). Avoid text decoding to preserve original bytes.
+            // Read entire content as raw bytes (binary-safe). We also take a prefix sample for content sniffing.
             byte[] contentBytes;
+            byte[] sampleBuffer;
+            const int sampleSize = 4096; // align with ContentDetectionOptions default
             using (var ms = new MemoryStream())
             {
+                // If stream is seekable, read sample first then reset; else we'll just copy once.
+                if (stream.CanSeek)
+                {
+                    var originalPos = stream.Position;
+                    var toRead = (int)Math.Min(sampleSize, stream.Length - stream.Position);
+                    sampleBuffer = new byte[toRead];
+                    var read = await stream.ReadAsync(sampleBuffer.AsMemory(0, toRead), ct).ConfigureAwait(false);
+                    if (read < toRead)
+                    {
+                        Array.Resize(ref sampleBuffer, read);
+                    }
+                    stream.Position = originalPos; // rewind
+                }
+                else
+                {
+                    sampleBuffer = Array.Empty<byte>(); // fallback; we'll rely on extension-only if needed
+                }
                 await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
                 contentBytes = ms.ToArray();
+                if (sampleBuffer.Length == 0)
+                {
+                    // take first bytes from full content as sample (stream non-seekable path)
+                    var altLen = Math.Min(sampleSize, contentBytes.Length);
+                    sampleBuffer = contentBytes.AsSpan(0, altLen).ToArray();
+                }
             }
 
             // Determine content type precedence:
             // 1. Destination explicit override (ServiceBusDestinationOptions.ContentType)
-            // 2. Detector (extension-based for now)
+            // 2. Detector (content sniff: XML/EDIFACT/etc.) using sample bytes
             // 3. Fallback to application/octet-stream
             string? configuredContentType = _destinations.CurrentValue.ServiceBus
                 .FirstOrDefault(x => string.Equals(x.Name, plan.DestinationName, StringComparison.OrdinalIgnoreCase))?
                 .ContentType;
-            var detectedContentType = _fileTypeDetector.Detect(fileEvent.Metadata.SourcePath);
+            var detectedContentType = _fileTypeDetector.Detect(fileEvent.Metadata.SourcePath, sampleBuffer);
             var finalContentType = configuredContentType ?? detectedContentType ?? "application/octet-stream";
             publishActivity?.SetTag("messaging.content_type", finalContentType);
             var request = new FilePublishRequest(

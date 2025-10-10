@@ -26,8 +26,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Abstractions.IFileContentReader, Infrastructure.Processing.SftpFileContentReader>();
         services.AddSingleton<Abstractions.IFileSink, Infrastructure.Processing.LocalFileSink>();
         services.AddSingleton<Abstractions.IFileRouter, Infrastructure.Processing.SimpleFileRouter>();
-        // File type detection (extension-based initial implementation)
-        services.AddSingleton<Abstractions.IFileTypeDetector, Infrastructure.Processing.ExtensionFileTypeDetector>();
+        // File type detection: keep raw extension detector + composite for future sniffers
+        services.AddSingleton<Infrastructure.Processing.ExtensionFileTypeDetector>();
+        services.AddSingleton<Abstractions.IFileTypeDetector>(sp =>
+            new Infrastructure.Processing.Detection.CompositeFileTypeDetector(
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Configuration.ContentDetectionOptions>>(),
+                sp.GetRequiredService<Infrastructure.Processing.ExtensionFileTypeDetector>()));
 
         // Remote client factories
         services.AddSingleton<Abstractions.ISftpClientFactory, Infrastructure.Remote.SshNetSftpClientFactory>();
@@ -118,6 +122,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<Configuration.TransferOptions>();
         services.AddSingleton<IValidateOptions<Configuration.TransferOptions>, Configuration.TransferOptionsValidator>();
         services.AddOptions<Configuration.IdempotencyOptions>();
+        services.AddOptions<Configuration.ContentDetectionOptions>();
 
         // Idempotency store (choose Redis if enabled)
         services.AddSingleton<Abstractions.IIdempotencyStore>(sp =>
