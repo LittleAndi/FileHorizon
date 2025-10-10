@@ -18,6 +18,7 @@ public sealed class DestinationsOptionsValidator : IValidateOptions<Destinations
             if (string.IsNullOrWhiteSpace(d.Name)) errors.Add($"{prefix}: Name must be specified.");
             else if (!seenNames.Add(d.Name)) errors.Add($"{prefix}: Name '{d.Name}' is duplicated.");
             if (string.IsNullOrWhiteSpace(d.RootPath)) errors.Add($"{prefix}: RootPath must be specified.");
+            else if (!Common.PathValidator.IsValidLocalPath(d.RootPath, out var lpErr)) errors.Add($"{prefix}: RootPath invalid: {lpErr}");
         }
 
         for (int i = 0; i < options.Sftp.Count; i++)
@@ -35,6 +36,7 @@ public sealed class DestinationsOptionsValidator : IValidateOptions<Destinations
             if (!string.IsNullOrWhiteSpace(d.PrivateKeyPassphraseSecretRef) && !hasKey)
                 errors.Add($"{prefix}: PrivateKeyPassphraseSecretRef specified but PrivateKeySecretRef is missing.");
             if (string.IsNullOrWhiteSpace(d.RootPath)) errors.Add($"{prefix}: RootPath must be specified.");
+            else if (!Common.PathValidator.IsValidRemotePath(d.RootPath, out var rpErr)) errors.Add($"{prefix}: RootPath invalid: {rpErr}");
         }
 
         return errors.Count > 0 ? ValidateOptionsResult.Fail(errors) : ValidateOptionsResult.Success;

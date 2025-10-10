@@ -15,12 +15,16 @@ public class SimpleFileRouterTests
     }
 
     private static IOptionsMonitor<RoutingOptions> Options(params RoutingRuleOptions[] rules)
-        => new StaticOptionsMonitor<RoutingOptions>(new RoutingOptions { Rules = rules.ToList() });
+        => new StaticOptionsMonitor<RoutingOptions>(new RoutingOptions { Rules = [.. rules] });
 
     [Fact]
     public async Task RouteAsync_NoMatch_ReturnsFailure()
     {
-        var router = new SimpleFileRouter(Options(), NullLogger<SimpleFileRouter>.Instance);
+        var router = new SimpleFileRouter(
+            routingOptions: Options(),
+            destinationsOptions: new StaticOptionsMonitor<DestinationsOptions>(new DestinationsOptions()),
+            logger: NullLogger<SimpleFileRouter>.Instance
+        );
         var res = await router.RouteAsync(MakeEvent("local", "/data/file.txt"), CancellationToken.None);
         Assert.True(res.IsFailure);
     }
@@ -37,7 +41,11 @@ public class SimpleFileRouterTests
             Overwrite = true,
             RenamePattern = "{yyyyMMdd}-{fileName}"
         };
-        var router = new SimpleFileRouter(Options(rule), NullLogger<SimpleFileRouter>.Instance);
+        var router = new SimpleFileRouter(
+            routingOptions: Options(rule),
+            destinationsOptions: new StaticOptionsMonitor<DestinationsOptions>(new DestinationsOptions()),
+            logger: NullLogger<SimpleFileRouter>.Instance
+        );
         var ev = MakeEvent("local", "/data/x/y/file.csv");
         var res = await router.RouteAsync(ev, CancellationToken.None);
         Assert.True(res.IsSuccess);

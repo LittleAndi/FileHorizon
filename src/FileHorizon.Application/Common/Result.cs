@@ -70,6 +70,14 @@ public readonly record struct Error(string Code, string Message)
         public static readonly Error EmptySourcePath = new("Validation.EmptySourcePath", "File metadata SourcePath was null or whitespace");
         public static readonly Error NegativeSize = new("Validation.NegativeSize", "File size must be >= 0");
     }
+
+    public static class Messaging
+    {
+        public static readonly Error DestinationEmpty = new("Messaging.DestinationEmpty", "DestinationName must be provided.");
+        public static readonly Error ContentEmpty = new("Messaging.ContentEmpty", "Content must not be empty.");
+        public static Error PublishTransient(string message) => new("Messaging.PublishTransient", message);
+        public static Error PublishError(string message) => new("Messaging.PublishError", message);
+    }
 }
 
 public static class Guard
