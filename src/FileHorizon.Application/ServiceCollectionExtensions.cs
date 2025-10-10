@@ -159,7 +159,10 @@ public static class ServiceCollectionExtensions
         {
             var opts = sp.GetRequiredService<IOptions<ServiceBusPublisherOptions>>().Value;
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
-            if (string.IsNullOrWhiteSpace(opts.ConnectionString))
+            // Enabled if either connection string or namespace present.
+            var hasCs = !string.IsNullOrWhiteSpace(opts.ConnectionString);
+            var hasNs = !string.IsNullOrWhiteSpace(opts.FullyQualifiedNamespace);
+            if (!hasCs && !hasNs)
             {
                 return new Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher(loggerFactory.CreateLogger<Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher>());
             }

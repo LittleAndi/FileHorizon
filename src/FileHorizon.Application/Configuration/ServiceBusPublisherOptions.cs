@@ -23,4 +23,10 @@ public sealed class ServiceBusPublisherOptions
 
     /// <summary>Maximum delay cap in milliseconds for exponential backoff.</summary>
     public int PublishRetryMaxDelayMs { get; init; } = 4000;
+
+    /// <summary>Fully qualified Service Bus namespace (e.g., my-namespace.servicebus.windows.net) used when ConnectionString is not provided (Managed Identity path).</summary>
+    public string? FullyQualifiedNamespace { get; init; }
+
+    /// <summary>Optional managed identity client id (user-assigned) if a specific identity should be used for auth.</summary>
+    public string? ManagedIdentityClientId { get; init; }
 }

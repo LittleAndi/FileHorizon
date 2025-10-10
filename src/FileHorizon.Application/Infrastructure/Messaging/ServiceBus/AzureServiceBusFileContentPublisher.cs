@@ -33,14 +33,51 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
     {
         _options = options.Value;
         _logger = logger;
-        if (string.IsNullOrWhiteSpace(_options.ConnectionString))
+
+        // Path 1: Connection string explicitly provided
+        if (!string.IsNullOrWhiteSpace(_options.ConnectionString))
         {
-            _enabled = false;
-            _logger.LogWarning("Service Bus publisher disabled (no connection string configured)");
+            _client = new ServiceBusClient(_options.ConnectionString);
+            _enabled = true;
+            _logger.LogInformation("Service Bus publisher initialized via connection string");
             return;
         }
-        _client = new ServiceBusClient(_options.ConnectionString);
-        _enabled = true;
+
+        // Path 2: Managed identity (namespace provided, connection string absent)
+        if (!string.IsNullOrWhiteSpace(_options.FullyQualifiedNamespace))
+        {
+            try
+            {
+                Azure.Core.TokenCredential credential;
+                if (!string.IsNullOrWhiteSpace(_options.ManagedIdentityClientId))
+                {
+                    credential = new Azure.Identity.DefaultAzureCredential(new Azure.Identity.DefaultAzureCredentialOptions
+                    {
+                        ManagedIdentityClientId = _options.ManagedIdentityClientId
+                    });
+                    _logger.LogInformation("Service Bus publisher using managed identity client id {ClientId}", _options.ManagedIdentityClientId);
+                }
+                else
+                {
+                    credential = new Azure.Identity.DefaultAzureCredential();
+                    _logger.LogInformation("Service Bus publisher using system-assigned managed identity");
+                }
+                _client = new ServiceBusClient(_options.FullyQualifiedNamespace, credential);
+                _enabled = true;
+                _logger.LogInformation("Service Bus publisher initialized via managed identity for namespace {Namespace}", _options.FullyQualifiedNamespace);
+                return;
+            }
+            catch (Exception ex)
+            {
+                _enabled = false;
+                _logger.LogError(ex, "Failed initializing Service Bus client via managed identity (namespace {Namespace})", _options.FullyQualifiedNamespace);
+                return;
+            }
+        }
+
+        // Neither connection string nor namespace provided: disabled
+        _enabled = false;
+        _logger.LogWarning("Service Bus publisher disabled: neither connection string nor fully qualified namespace configured");
     }
 
     public async Task<Result> PublishAsync(FilePublishRequest request, CancellationToken ct)
