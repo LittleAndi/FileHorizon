@@ -318,67 +318,83 @@ public sealed class FileProcessingOrchestrator(
 
     private async Task DeleteRemoteAsync(FileEvent fileEvent, bool isSftp, CancellationToken ct)
     {
-        var sourcePath = fileEvent.Metadata.SourcePath;
-        if (string.IsNullOrWhiteSpace(sourcePath)) return;
-        if (!Uri.TryCreate(sourcePath, UriKind.Absolute, out var uri)) return;
-        var protocol = isSftp ? "sftp" : "ftp";
-        var host = uri.Host;
-        var port = uri.Port;
+        if (!TryParseRemoteFile(fileEvent.Metadata.SourcePath, isSftp, out var host, out var port, out var remotePath)) return;
+        if (isSftp)
+        {
+            await DeleteSftpAsync(host, port, remotePath, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            await DeleteFtpAsync(host, port, remotePath, ct).ConfigureAwait(false);
+        }
+    }
+
+    private bool TryParseRemoteFile(string? sourcePath, bool isSftp, out string host, out int port, out string remotePath)
+    {
+        host = string.Empty;
+        port = 0;
+        remotePath = string.Empty;
+        if (string.IsNullOrWhiteSpace(sourcePath)) return false;
+        if (!Uri.TryCreate(sourcePath, UriKind.Absolute, out var uri)) return false;
+        host = uri.Host;
+        port = uri.Port;
         if (port <= 0 || uri.IsDefaultPort)
         {
             port = isSftp ? 22 : 21;
         }
-        var remotePath = uri.AbsolutePath;
+        remotePath = uri.AbsolutePath;
+        return true;
+    }
 
-        if (isSftp)
+    private async Task DeleteSftpAsync(string host, int port, string remotePath, CancellationToken ct)
+    {
+        var src = _remoteSources.CurrentValue.Sftp.FirstOrDefault(s => s.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && s.Port == port && remotePath.StartsWith(s.RemotePath, StringComparison.OrdinalIgnoreCase));
+        if (src is null) return;
+        try
         {
-            var src = _remoteSources.CurrentValue.Sftp.FirstOrDefault(s => s.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && s.Port == port && remotePath.StartsWith(s.RemotePath, StringComparison.OrdinalIgnoreCase));
-            if (src is null) return; // cannot resolve credentials
-            try
-            {
-                var password = await _secretResolver.ResolveSecretAsync(src.PasswordSecretRef, ct).ConfigureAwait(false);
-                await using var client = new Infrastructure.Remote.SftpRemoteFileClient(
-                    logger: sftpClientLogger,
-                    host: src.Host,
-                    port: src.Port,
-                    username: src.Username ?? string.Empty,
-                    password,
-                    null,
-                    null
-                );
-                await client.ConnectAsync(ct).ConfigureAwait(false);
-                await client.DeleteAsync(remotePath, ct).ConfigureAwait(false);
-                _logger.LogDebug("Deleted remote SFTP file {Path}", remotePath);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed deleting remote SFTP file {Path}", remotePath);
-            }
+            var password = await _secretResolver.ResolveSecretAsync(src.PasswordSecretRef, ct).ConfigureAwait(false);
+            await using var client = new Infrastructure.Remote.SftpRemoteFileClient(
+                logger: sftpClientLogger,
+                host: src.Host,
+                port: src.Port,
+                username: src.Username ?? string.Empty,
+                password,
+                null,
+                null
+            );
+            await client.ConnectAsync(ct).ConfigureAwait(false);
+            await client.DeleteAsync(remotePath, ct).ConfigureAwait(false);
+            _logger.LogDebug("Deleted remote SFTP file {Path}", remotePath);
         }
-        else
+        catch (Exception ex)
         {
-            var src = _remoteSources.CurrentValue.Ftp.FirstOrDefault(s => s.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && s.Port == port && remotePath.StartsWith(s.RemotePath, StringComparison.OrdinalIgnoreCase));
-            if (src is null) return;
-            try
-            {
-                var password = await _secretResolver.ResolveSecretAsync(src.PasswordSecretRef, ct).ConfigureAwait(false);
-                var ftpClient = new Infrastructure.Remote.FtpRemoteFileClient(
-                    logger: ftpClientLogger,
-                    host: src.Host,
-                    port: src.Port,
-                    username: src.Username,
-                    password: password,
-                    passive: src.Passive
-                );
-                await ftpClient.ConnectAsync(ct).ConfigureAwait(false);
-                await ftpClient.DeleteAsync(remotePath, ct).ConfigureAwait(false);
-                await ftpClient.DisposeAsync();
-                _logger.LogDebug("Deleted remote FTP file {Path}", remotePath);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed deleting remote FTP file {Path}", remotePath);
-            }
+            _logger.LogWarning(ex, "Failed deleting remote SFTP file {Path}", remotePath);
+        }
+    }
+
+    private async Task DeleteFtpAsync(string host, int port, string remotePath, CancellationToken ct)
+    {
+        var src = _remoteSources.CurrentValue.Ftp.FirstOrDefault(s => s.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && s.Port == port && remotePath.StartsWith(s.RemotePath, StringComparison.OrdinalIgnoreCase));
+        if (src is null) return;
+        try
+        {
+            var password = await _secretResolver.ResolveSecretAsync(src.PasswordSecretRef, ct).ConfigureAwait(false);
+            var ftpClient = new Infrastructure.Remote.FtpRemoteFileClient(
+                logger: ftpClientLogger,
+                host: src.Host,
+                port: src.Port,
+                username: src.Username,
+                password: password,
+                passive: src.Passive
+            );
+            await ftpClient.ConnectAsync(ct).ConfigureAwait(false);
+            await ftpClient.DeleteAsync(remotePath, ct).ConfigureAwait(false);
+            await ftpClient.DisposeAsync();
+            _logger.LogDebug("Deleted remote FTP file {Path}", remotePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed deleting remote FTP file {Path}", remotePath);
         }
     }
 }
