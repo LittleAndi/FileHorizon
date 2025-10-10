@@ -78,119 +78,115 @@ public sealed class FileProcessingOrchestrator(
         }
         await using var stream = open.Value!;
 
-        if (plan.Kind == Models.DestinationKind.ServiceBus)
-        {
-            using var publishActivity = TelemetryInstrumentation.ActivitySource.StartActivity("servicebus.publish", ActivityKind.Producer);
-            publishActivity?.SetTag("messaging.system", "azure.servicebus");
-            publishActivity?.SetTag("messaging.destination", plan.DestinationName);
-            // Read entire content as raw bytes (binary-safe). We also take a prefix sample for content sniffing.
-            byte[] contentBytes;
-            byte[] sampleBuffer;
-            const int sampleSize = 4096; // align with ContentDetectionOptions default
-            using (var ms = new MemoryStream())
-            {
-                // If stream is seekable, read sample first then reset; else we'll just copy once.
-                if (stream.CanSeek)
-                {
-                    var originalPos = stream.Position;
-                    var toRead = (int)Math.Min(sampleSize, stream.Length - stream.Position);
-                    sampleBuffer = new byte[toRead];
-                    var read = await stream.ReadAsync(sampleBuffer.AsMemory(0, toRead), ct).ConfigureAwait(false);
-                    if (read < toRead)
-                    {
-                        Array.Resize(ref sampleBuffer, read);
-                    }
-                    stream.Position = originalPos; // rewind
-                }
-                else
-                {
-                    sampleBuffer = Array.Empty<byte>(); // fallback; we'll rely on extension-only if needed
-                }
-                await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
-                contentBytes = ms.ToArray();
-                if (sampleBuffer.Length == 0)
-                {
-                    // take first bytes from full content as sample (stream non-seekable path)
-                    var altLen = Math.Min(sampleSize, contentBytes.Length);
-                    sampleBuffer = contentBytes.AsSpan(0, altLen).ToArray();
-                }
-            }
-
-            // Determine content type precedence:
-            // 1. Destination explicit override (ServiceBusDestinationOptions.ContentType)
-            // 2. Detector (content sniff: XML/EDIFACT/etc.) using sample bytes
-            // 3. Fallback to application/octet-stream
-            string? configuredContentType = _destinations.CurrentValue.ServiceBus
-                .FirstOrDefault(x => string.Equals(x.Name, plan.DestinationName, StringComparison.OrdinalIgnoreCase))?
-                .ContentType;
-            var detectedContentType = _fileTypeDetector.Detect(fileEvent.Metadata.SourcePath, sampleBuffer);
-            var finalContentType = configuredContentType ?? detectedContentType ?? "application/octet-stream";
-            publishActivity?.SetTag("messaging.content_type", finalContentType);
-            var request = new FilePublishRequest(
-                SourcePath: fileEvent.Metadata.SourcePath,
-                FileName: Path.GetFileName(fileEvent.Metadata.SourcePath),
-                Content: contentBytes,
-                ContentType: finalContentType,
-                DestinationName: plan.DestinationName,
-                IsTopic: plan.IsTopic,
-                ApplicationProperties: new Dictionary<string, string>
-                {
-                    ["fh.fileId"] = fileEvent.Id,
-                    ["fh.protocol"] = fileEvent.Protocol
-                }
-            );
-            var publish = await _publisher.PublishAsync(request, ct).ConfigureAwait(false);
-            if (publish.IsFailure)
-            {
-                publishActivity?.SetStatus(ActivityStatusCode.Error, publish.Error.ToString());
-                return publish; // propagate failure
-            }
-            publishActivity?.SetStatus(ActivityStatusCode.Ok);
-
-            // Ensure stream disposed before attempting deletion (it still references the source file)
-            await stream.DisposeAsync().ConfigureAwait(false);
-
-            await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
-            return Result.Success();
-        }
-        else if (plan.Kind == Models.DestinationKind.Local)
-        {
-            var destRoot = ResolveLocalDestinationRoot(plan.DestinationName);
-            if (destRoot is null)
-            {
-                _logger.LogWarning("Unknown local destination {Dest}", plan.DestinationName);
-                return Result.Failure(Error.Validation.Invalid($"Unknown destination '{plan.DestinationName}'"));
-            }
-            var targetRef = new FileReference(
-                Scheme: "local",
-                Host: null,
-                Port: null,
-                Path: System.IO.Path.Combine(destRoot, plan.TargetPath),
-                SourceName: plan.DestinationName);
-            var sink = _sinks.FirstOrDefault(s => string.Equals(s.Name, "Local", StringComparison.OrdinalIgnoreCase));
-            if (sink is null)
-            {
-                return Result.Failure(Error.Unspecified("Sink.LocalMissing", "Local sink not registered"));
-            }
-            var write = await sink.WriteAsync(targetRef, stream, plan.Options, ct).ConfigureAwait(false);
-            if (write.IsFailure)
-            {
-                return write;
-            }
-
-            // Ensure stream disposed before attempting deletion of source file
-            await stream.DisposeAsync().ConfigureAwait(false);
-
-            await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
-            return Result.Success();
-        }
-        else if (plan.Kind == Models.DestinationKind.Sftp)
-        {
-            // Future implementation for Sftp destination writes.
-            return Result.Failure(Error.Unspecified("Destination.SftpUnsupported", "Sftp destination handling not implemented"));
-        }
-        return Result.Failure(Error.Unspecified("Destination.UnknownKind", $"Unhandled destination kind {plan.Kind}"));
+        var dispatchResult = await DispatchDestinationAsync(fileEvent, plan, stream, ct).ConfigureAwait(false);
+        return dispatchResult;
     }
+
+    private async Task<Result> ProcessServiceBusAsync(FileEvent fileEvent, DestinationPlan plan, Stream stream, CancellationToken ct)
+    {
+        using var publishActivity = TelemetryInstrumentation.ActivitySource.StartActivity("servicebus.publish", ActivityKind.Producer);
+        publishActivity?.SetTag("messaging.system", "azure.servicebus");
+        publishActivity?.SetTag("messaging.destination", plan.DestinationName);
+        // Read entire content as raw bytes (binary-safe). We also take a prefix sample for content sniffing.
+        byte[] contentBytes;
+        byte[] sampleBuffer;
+        const int sampleSize = 4096; // align with ContentDetectionOptions default
+        using (var ms = new MemoryStream())
+        {
+            if (stream.CanSeek)
+            {
+                var originalPos = stream.Position;
+                var toRead = (int)Math.Min(sampleSize, stream.Length - stream.Position);
+                sampleBuffer = new byte[toRead];
+                var read = await stream.ReadAsync(sampleBuffer.AsMemory(0, toRead), ct).ConfigureAwait(false);
+                if (read < toRead)
+                {
+                    Array.Resize(ref sampleBuffer, read);
+                }
+                stream.Position = originalPos; // rewind
+            }
+            else
+            {
+                sampleBuffer = Array.Empty<byte>();
+            }
+            await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
+            contentBytes = ms.ToArray();
+            if (sampleBuffer.Length == 0)
+            {
+                var altLen = Math.Min(sampleSize, contentBytes.Length);
+                sampleBuffer = contentBytes.AsSpan(0, altLen).ToArray();
+            }
+        }
+
+        string? configuredContentType = _destinations.CurrentValue.ServiceBus
+            .FirstOrDefault(x => string.Equals(x.Name, plan.DestinationName, StringComparison.OrdinalIgnoreCase))?
+            .ContentType;
+        var detectedContentType = _fileTypeDetector.Detect(fileEvent.Metadata.SourcePath, sampleBuffer);
+        var finalContentType = configuredContentType ?? detectedContentType ?? "application/octet-stream";
+        publishActivity?.SetTag("messaging.content_type", finalContentType);
+        var request = new FilePublishRequest(
+            SourcePath: fileEvent.Metadata.SourcePath,
+            FileName: Path.GetFileName(fileEvent.Metadata.SourcePath),
+            Content: contentBytes,
+            ContentType: finalContentType,
+            DestinationName: plan.DestinationName,
+            IsTopic: plan.IsTopic,
+            ApplicationProperties: new Dictionary<string, string>
+            {
+                ["fh.fileId"] = fileEvent.Id,
+                ["fh.protocol"] = fileEvent.Protocol
+            }
+        );
+        var publish = await _publisher.PublishAsync(request, ct).ConfigureAwait(false);
+        if (publish.IsFailure)
+        {
+            publishActivity?.SetStatus(ActivityStatusCode.Error, publish.Error.ToString());
+            return publish; // propagate failure
+        }
+        publishActivity?.SetStatus(ActivityStatusCode.Ok);
+
+        await stream.DisposeAsync().ConfigureAwait(false);
+        await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    private async Task<Result> ProcessLocalAsync(FileEvent fileEvent, DestinationPlan plan, Stream stream, CancellationToken ct)
+    {
+        var destRoot = ResolveLocalDestinationRoot(plan.DestinationName);
+        if (destRoot is null)
+        {
+            _logger.LogWarning("Unknown local destination {Dest}", plan.DestinationName);
+            return Result.Failure(Error.Validation.Invalid($"Unknown destination '{plan.DestinationName}'"));
+        }
+        var targetRef = new FileReference(
+            Scheme: "local",
+            Host: null,
+            Port: null,
+            Path: System.IO.Path.Combine(destRoot, plan.TargetPath),
+            SourceName: plan.DestinationName);
+        var sink = _sinks.FirstOrDefault(s => string.Equals(s.Name, "Local", StringComparison.OrdinalIgnoreCase));
+        if (sink is null)
+        {
+            return Result.Failure(Error.Unspecified("Sink.LocalMissing", "Local sink not registered"));
+        }
+        var write = await sink.WriteAsync(targetRef, stream, plan.Options, ct).ConfigureAwait(false);
+        if (write.IsFailure)
+        {
+            return write;
+        }
+        await stream.DisposeAsync().ConfigureAwait(false);
+        await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    private Task<Result> DispatchDestinationAsync(FileEvent fileEvent, DestinationPlan plan, Stream stream, CancellationToken ct) =>
+        plan.Kind switch
+        {
+            Models.DestinationKind.ServiceBus => ProcessServiceBusAsync(fileEvent, plan, stream, ct),
+            Models.DestinationKind.Local => ProcessLocalAsync(fileEvent, plan, stream, ct),
+            Models.DestinationKind.Sftp => Task.FromResult(Result.Failure(Error.Unspecified("Destination.SftpUnsupported", "Sftp destination handling not implemented"))),
+            _ => Task.FromResult(Result.Failure(Error.Unspecified("Destination.UnknownKind", $"Unhandled destination kind {plan.Kind}")))
+        };
 
     /// <summary>
     /// Selects appropriate reader for the event protocol and opens the source stream.
