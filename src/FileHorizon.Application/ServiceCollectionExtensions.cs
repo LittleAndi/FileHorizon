@@ -26,6 +26,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Abstractions.IFileContentReader, Infrastructure.Processing.SftpFileContentReader>();
         services.AddSingleton<Abstractions.IFileSink, Infrastructure.Processing.LocalFileSink>();
         services.AddSingleton<Abstractions.IFileRouter, Infrastructure.Processing.SimpleFileRouter>();
+        // File type detection (extension-based initial implementation)
+        services.AddSingleton<Abstractions.IFileTypeDetector, Infrastructure.Processing.ExtensionFileTypeDetector>();
 
         // Remote client factories
         services.AddSingleton<Abstractions.ISftpClientFactory, Infrastructure.Remote.SshNetSftpClientFactory>();

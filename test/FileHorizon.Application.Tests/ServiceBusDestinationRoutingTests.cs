@@ -119,7 +119,7 @@ public class ServiceBusDestinationRoutingTests
             EnableTracing = false
         });
         // Publisher is fake; Azure client unused but options must exist for other registrations (not building DI here)
-        var orchestrator = new FileProcessingOrchestrator(router, [reader], [sink], destOpts, idempOpts, remoteSources, idempStore, sftpFactory, secretResolver, sftpLogger, ftpLogger, publisher, orchestratorLogger);
+        var orchestrator = new FileProcessingOrchestrator(router, [reader], [sink], destOpts, idempOpts, remoteSources, idempStore, sftpFactory, secretResolver, sftpLogger, ftpLogger, publisher, new Infrastructure.Processing.ExtensionFileTypeDetector(), orchestratorLogger);
         var fe = new FileEvent(
             Id: "id2",
             Metadata: new FileMetadata(SourcePath: "C:/data/in/app.log", SizeBytes: 5, LastModifiedUtc: DateTimeOffset.UtcNow, HashAlgorithm: "MD5", Checksum: null),

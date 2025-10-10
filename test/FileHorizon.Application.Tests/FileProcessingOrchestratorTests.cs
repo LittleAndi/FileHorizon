@@ -82,6 +82,7 @@ public class FileProcessingOrchestratorTests
             sftpClientLogger: NullLogger<Infrastructure.Remote.SftpRemoteFileClient>.Instance,
             ftpClientLogger: NullLogger<Infrastructure.Remote.FtpRemoteFileClient>.Instance,
             publisher: publisher,
+            fileTypeDetector: new Infrastructure.Processing.ExtensionFileTypeDetector(),
             logger: NullLogger<FileProcessingOrchestrator>.Instance
         );
 

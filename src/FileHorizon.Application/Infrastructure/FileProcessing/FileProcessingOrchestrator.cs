@@ -27,6 +27,7 @@ public sealed class FileProcessingOrchestrator(
     ILogger<SftpRemoteFileClient> sftpClientLogger,
     ILogger<FtpRemoteFileClient> ftpClientLogger,
     Abstractions.IFileContentPublisher publisher,
+    Abstractions.IFileTypeDetector fileTypeDetector,
     ILogger<FileProcessingOrchestrator> logger) : IFileProcessor
 {
     private readonly IFileRouter _router = router;
@@ -42,6 +43,7 @@ public sealed class FileProcessingOrchestrator(
     private readonly ILogger<FtpRemoteFileClient> ftpClientLogger = ftpClientLogger;
     private readonly ILogger<FileProcessingOrchestrator> _logger = logger;
     private readonly Abstractions.IFileContentPublisher _publisher = publisher;
+    private readonly Abstractions.IFileTypeDetector _fileTypeDetector = fileTypeDetector;
 
     public async Task<Result> ProcessAsync(FileEvent fileEvent, CancellationToken ct)
     {
@@ -111,15 +113,29 @@ public sealed class FileProcessingOrchestrator(
             using var publishActivity = TelemetryInstrumentation.ActivitySource.StartActivity("servicebus.publish", ActivityKind.Producer);
             publishActivity?.SetTag("messaging.system", "azure.servicebus");
             publishActivity?.SetTag("messaging.destination", plan.DestinationName);
-            // Read entire content as text (future: binary support). Assume UTF-8 text.
-            using var readerText = new StreamReader(stream, leaveOpen: true);
-            var textContent = await readerText.ReadToEndAsync(ct).ConfigureAwait(false);
-            var contentBytes = System.Text.Encoding.UTF8.GetBytes(textContent);
+            // Read entire content as raw bytes (binary-safe). Avoid text decoding to preserve original bytes.
+            byte[] contentBytes;
+            using (var ms = new MemoryStream())
+            {
+                await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
+                contentBytes = ms.ToArray();
+            }
+
+            // Determine content type precedence:
+            // 1. Destination explicit override (ServiceBusDestinationOptions.ContentType)
+            // 2. Detector (extension-based for now)
+            // 3. Fallback to application/octet-stream
+            string? configuredContentType = _destinations.CurrentValue.ServiceBus
+                .FirstOrDefault(x => string.Equals(x.Name, plan.DestinationName, StringComparison.OrdinalIgnoreCase))?
+                .ContentType;
+            var detectedContentType = _fileTypeDetector.Detect(fileEvent.Metadata.SourcePath);
+            var finalContentType = configuredContentType ?? detectedContentType ?? "application/octet-stream";
+            publishActivity?.SetTag("messaging.content_type", finalContentType);
             var request = new FilePublishRequest(
                 SourcePath: fileEvent.Metadata.SourcePath,
                 FileName: Path.GetFileName(fileEvent.Metadata.SourcePath),
                 Content: contentBytes,
-                ContentType: "text/plain",
+                ContentType: finalContentType,
                 DestinationName: plan.DestinationName,
                 IsTopic: plan.IsTopic,
                 ApplicationProperties: new Dictionary<string, string>
