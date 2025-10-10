@@ -286,42 +286,51 @@ public sealed class FileProcessingOrchestrator(
         return d?.RootPath;
     }
 
-    private async Task DeleteSourceIfRequestedAsync(FileEvent fileEvent, CancellationToken ct)
+    private Task DeleteSourceIfRequestedAsync(FileEvent fileEvent, CancellationToken ct)
     {
-        if (!fileEvent.DeleteAfterTransfer) return; // event not requesting deletion
+        if (!fileEvent.DeleteAfterTransfer) return Task.CompletedTask; // no deletion requested
         var protocol = fileEvent.Protocol?.ToLowerInvariant();
-        if (protocol == "local")
+        return protocol switch
         {
-            var path = fileEvent.Metadata.SourcePath;
-            try
+            "local" => DeleteLocalAsync(fileEvent.Metadata.SourcePath),
+            "sftp" => DeleteRemoteAsync(fileEvent, isSftp: true, ct),
+            "ftp" => DeleteRemoteAsync(fileEvent, isSftp: false, ct),
+            _ => Task.CompletedTask
+        };
+    }
+
+    private Task DeleteLocalAsync(string path)
+    {
+        try
+        {
+            if (System.IO.File.Exists(path))
             {
-                if (System.IO.File.Exists(path))
-                {
-                    System.IO.File.Delete(path);
-                    _logger.LogDebug("Deleted local source file {Path}", path);
-                }
+                System.IO.File.Delete(path);
+                _logger.LogDebug("Deleted local source file {Path}", path);
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed deleting local source file {Path}", path);
-            }
-            return;
         }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed deleting local source file {Path}", path);
+        }
+        return Task.CompletedTask;
+    }
 
-        if (protocol is not ("sftp" or "ftp")) return; // no deletion for other protocols yet
-
+    private async Task DeleteRemoteAsync(FileEvent fileEvent, bool isSftp, CancellationToken ct)
+    {
         var sourcePath = fileEvent.Metadata.SourcePath;
         if (string.IsNullOrWhiteSpace(sourcePath)) return;
         if (!Uri.TryCreate(sourcePath, UriKind.Absolute, out var uri)) return;
+        var protocol = isSftp ? "sftp" : "ftp";
         var host = uri.Host;
         var port = uri.Port;
         if (port <= 0 || uri.IsDefaultPort)
         {
-            port = protocol == "sftp" ? 22 : 21;
+            port = isSftp ? 22 : 21;
         }
         var remotePath = uri.AbsolutePath;
 
-        if (protocol == "sftp")
+        if (isSftp)
         {
             var src = _remoteSources.CurrentValue.Sftp.FirstOrDefault(s => s.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && s.Port == port && remotePath.StartsWith(s.RemotePath, StringComparison.OrdinalIgnoreCase));
             if (src is null) return; // cannot resolve credentials
@@ -332,7 +341,10 @@ public sealed class FileProcessingOrchestrator(
                     logger: sftpClientLogger,
                     host: src.Host,
                     port: src.Port,
-                    username: src.Username ?? string.Empty, password, null, null
+                    username: src.Username ?? string.Empty,
+                    password,
+                    null,
+                    null
                 );
                 await client.ConnectAsync(ct).ConfigureAwait(false);
                 await client.DeleteAsync(remotePath, ct).ConfigureAwait(false);
@@ -343,7 +355,7 @@ public sealed class FileProcessingOrchestrator(
                 _logger.LogWarning(ex, "Failed deleting remote SFTP file {Path}", remotePath);
             }
         }
-        else if (protocol == "ftp")
+        else
         {
             var src = _remoteSources.CurrentValue.Ftp.FirstOrDefault(s => s.Host.Equals(host, StringComparison.OrdinalIgnoreCase) && s.Port == port && remotePath.StartsWith(s.RemotePath, StringComparison.OrdinalIgnoreCase));
             if (src is null) return;
