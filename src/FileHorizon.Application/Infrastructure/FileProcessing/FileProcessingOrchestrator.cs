@@ -135,6 +135,10 @@ public sealed class FileProcessingOrchestrator(
                 return publish; // propagate failure
             }
             publishActivity?.SetStatus(ActivityStatusCode.Ok);
+
+            // Ensure stream disposed before attempting deletion (it still references the source file)
+            await stream.DisposeAsync().ConfigureAwait(false);
+
             await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
             return Result.Success();
         }
@@ -162,6 +166,10 @@ public sealed class FileProcessingOrchestrator(
             {
                 return write;
             }
+
+            // Ensure stream disposed before attempting deletion of source file
+            await stream.DisposeAsync().ConfigureAwait(false);
+
             await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
             return Result.Success();
         }
