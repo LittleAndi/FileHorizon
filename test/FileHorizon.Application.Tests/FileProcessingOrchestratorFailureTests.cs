@@ -3,6 +3,7 @@ using FileHorizon.Application.Common;
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Infrastructure.FileProcessing;
 using FileHorizon.Application.Models;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis.Configuration;
@@ -69,6 +70,11 @@ public class FileProcessingOrchestratorFailureTests
         var remoteSources = new RemoteFileSourcesOptions();
         var publisher = new FakePublisher();
 
+        // Minimal IConfiguration for tests (add keys if the orchestrator reads any)
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection([])
+            .Build();
+
         var orchestrator = new FileProcessingOrchestrator(
             router: router,
             readers: readers,
@@ -78,7 +84,7 @@ public class FileProcessingOrchestratorFailureTests
             remoteSources: new StaticOptionsMonitor<RemoteFileSourcesOptions>(remoteSources),
             idempotencyStore: new Infrastructure.Idempotency.InMemoryIdempotencyStore(),
             sftpFactory: new Infrastructure.Remote.SshNetSftpClientFactory(NullLogger<Infrastructure.Remote.SshNetSftpClientFactory>.Instance),
-            secretResolver: new Infrastructure.Secrets.InMemorySecretResolver(NullLogger<Infrastructure.Secrets.InMemorySecretResolver>.Instance),
+            secretResolver: new Infrastructure.Secrets.InMemorySecretResolver(configuration, NullLogger<Infrastructure.Secrets.InMemorySecretResolver>.Instance),
             sftpClientLogger: NullLogger<Infrastructure.Remote.SftpRemoteFileClient>.Instance,
             ftpClientLogger: NullLogger<Infrastructure.Remote.FtpRemoteFileClient>.Instance,
             publisher: publisher,

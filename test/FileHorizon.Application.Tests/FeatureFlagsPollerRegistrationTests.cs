@@ -3,6 +3,7 @@ using FileHorizon.Application.Infrastructure.Polling;
 using FileHorizon.Application.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
 
 namespace FileHorizon.Application.Tests;
 
@@ -11,6 +12,8 @@ public class FeatureFlagsPollerRegistrationTests
     private static ServiceProvider Build(bool enableLocal, bool enableFtp, bool enableSftp)
     {
         var services = new ServiceCollection();
+        // Provide minimal configuration required for InMemorySecretResolver
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection().Build());
         services.AddLogging();
         services.AddOptions<PipelineOptions>();
         services.AddOptions<PollingOptions>();
