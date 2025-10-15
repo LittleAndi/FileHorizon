@@ -26,6 +26,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Abstractions.IFileContentReader, Infrastructure.Processing.SftpFileContentReader>();
         services.AddSingleton<Abstractions.IFileSink, Infrastructure.Processing.LocalFileSink>();
         services.AddSingleton<Abstractions.IFileRouter, Infrastructure.Processing.SimpleFileRouter>();
+        // File type detection: keep raw extension detector + composite for future sniffers
+        services.AddSingleton<Infrastructure.Processing.ExtensionFileTypeDetector>();
+        services.AddSingleton<Abstractions.IFileTypeDetector>(sp =>
+            new Infrastructure.Processing.Detection.CompositeFileTypeDetector(
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Configuration.ContentDetectionOptions>>(),
+                sp.GetRequiredService<Infrastructure.Processing.ExtensionFileTypeDetector>()));
 
         // Remote client factories
         services.AddSingleton<Abstractions.ISftpClientFactory, Infrastructure.Remote.SshNetSftpClientFactory>();
@@ -107,6 +113,8 @@ public static class ServiceCollectionExtensions
         services.AddOptions<PipelineFeaturesOptions>();
         services.AddOptions<Configuration.RemoteFileSourcesOptions>();
         services.AddSingleton<IValidateOptions<Configuration.RemoteFileSourcesOptions>, Configuration.RemoteFileSourcesOptionsValidator>();
+        services.AddOptions<Configuration.FileSourcesOptions>();
+        services.AddSingleton<IValidateOptions<Configuration.FileSourcesOptions>, Configuration.FileSourcesOptionsValidator>();
         services.AddOptions<Configuration.DestinationsOptions>();
         services.AddSingleton<IValidateOptions<Configuration.DestinationsOptions>, Configuration.DestinationsOptionsValidator>();
         services.AddOptions<Configuration.RoutingOptions>();
@@ -114,6 +122,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<Configuration.TransferOptions>();
         services.AddSingleton<IValidateOptions<Configuration.TransferOptions>, Configuration.TransferOptionsValidator>();
         services.AddOptions<Configuration.IdempotencyOptions>();
+        services.AddOptions<Configuration.ContentDetectionOptions>();
 
         // Idempotency store (choose Redis if enabled)
         services.AddSingleton<Abstractions.IIdempotencyStore>(sp =>
@@ -151,6 +160,20 @@ public static class ServiceCollectionExtensions
                 PipelineRole.All => new CompositeHostedService(logger, polling, processing),
                 _ => new CompositeHostedService(logger, polling, processing)
             };
+        });
+
+        // Service Bus publisher options (bound in host via configuration). Conditionally register real publisher only when connection string present.
+        services.AddSingleton<Abstractions.IFileContentPublisher>(sp =>
+        {
+            var destOpts = sp.GetService<IOptionsMonitor<DestinationsOptions>>()?.CurrentValue;
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            var anyCs = destOpts?.ServiceBus.Any(d => !string.IsNullOrWhiteSpace(d.ServiceBusTechnical.ConnectionString)) == true;
+            var hasNs = !string.IsNullOrWhiteSpace(destOpts?.ServiceBus.First().ServiceBusTechnical.FullyQualifiedNamespace);
+            if (!anyCs && !hasNs)
+            {
+                return new Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher(loggerFactory.CreateLogger<Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher>());
+            }
+            return ActivatorUtilities.CreateInstance<Infrastructure.Messaging.ServiceBus.AzureServiceBusFileContentPublisher>(sp);
         });
 
         return services;

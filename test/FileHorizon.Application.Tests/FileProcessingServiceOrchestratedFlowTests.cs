@@ -1,9 +1,12 @@
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Core;
 using FileHorizon.Application.Models;
+using FileHorizon.Application.Abstractions;
+using FileHorizon.Application.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
 
 namespace FileHorizon.Application.Tests;
 
@@ -24,8 +27,10 @@ public class FileProcessingServiceOrchestratedFlowTests
     {
         // Arrange DI
         var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection().Build());
         services.AddLogging(b => b.AddDebug().SetMinimumLevel(LogLevel.Debug));
         services.AddApplicationServices();
+        services.AddSingleton<IFileContentPublisher, TestNoopFileContentPublisher>();
 
         // Required base options
         services.AddSingleton<IOptions<PollingOptions>>(Options.Create(new PollingOptions()));
@@ -91,5 +96,10 @@ public class FileProcessingServiceOrchestratedFlowTests
         // Cleanup
         try { File.Delete(srcFile); } catch { }
         try { Directory.Delete(destRoot, true); } catch { }
+    }
+
+    private sealed class TestNoopFileContentPublisher : IFileContentPublisher
+    {
+        public Task<Result> PublishAsync(FilePublishRequest request, CancellationToken ct) => Task.FromResult(Result.Success());
     }
 }

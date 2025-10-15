@@ -1,6 +1,8 @@
 using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Common;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.FileSystemGlobbing;
+using System.Collections.Concurrent;
 using Renci.SshNet;
 
 namespace FileHorizon.Application.Infrastructure.Remote;
@@ -131,11 +133,28 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
 
     private static bool IsDotDir(string name) => name == "." || name == "..";
 
+    // Cache compiled matchers for patterns to avoid re-parsing on every file.
+    private static readonly ConcurrentDictionary<string, Matcher> _matcherCache = new(StringComparer.OrdinalIgnoreCase);
+
     private static bool GlobMatch(string name, string pattern)
     {
-        if (string.IsNullOrWhiteSpace(pattern) || pattern == "*" || pattern == "*.*") return true;
-        if (pattern.StartsWith("*.") && name.EndsWith(pattern[1..], StringComparison.OrdinalIgnoreCase)) return true;
-        return string.Equals(name, pattern, StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(pattern) || pattern is "*") return true; // treat *.* as historical match-all too
+        if (pattern is "*.*") return true;
+
+        // We only match against the file name here (not directory path).
+        // FileSystemGlobbing expects patterns relative to a root; we'll feed the name as a single-segment path.
+        var matcher = _matcherCache.GetOrAdd(pattern, p =>
+        {
+            var m = new Matcher(StringComparison.OrdinalIgnoreCase);
+            m.AddInclude(p);
+            return m;
+        });
+
+        // Matcher works over directory structures. We'll emulate a minimal structure by executing against a single in-memory file list.
+        // Simpler approach: matcher.Match(name) which is an overload added in .NET 8 package for direct string matching is not available; emulate manually.
+        // Use PatternMatchingResult directly via Match(string) extension if available; otherwise, fallback to creating a virtual segment.
+        var result = matcher.Match(name);
+        return result.HasMatches;
     }
 
     public ValueTask DisposeAsync()

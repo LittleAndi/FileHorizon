@@ -1,4 +1,5 @@
 using FileHorizon.Application.Abstractions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 
@@ -8,8 +9,9 @@ namespace FileHorizon.Application.Infrastructure.Secrets;
 /// Development placeholder secret resolver. Looks up values from environment variables first (by exact key),
 /// then an internal registration dictionary. Intended to be replaced by a Key Vault implementation in Host layer.
 /// </summary>
-public sealed class InMemorySecretResolver(ILogger<InMemorySecretResolver> logger) : ISecretResolver
+public sealed class InMemorySecretResolver(IConfiguration configuration, ILogger<InMemorySecretResolver> logger) : ISecretResolver
 {
+    private readonly IConfiguration _configuration = configuration;
     private readonly ILogger<InMemorySecretResolver> _logger = logger;
     private readonly ConcurrentDictionary<string, string> _secrets = new(StringComparer.OrdinalIgnoreCase);
 
@@ -20,6 +22,10 @@ public sealed class InMemorySecretResolver(ILogger<InMemorySecretResolver> logge
         // Environment variable first
         var env = Environment.GetEnvironmentVariable(secretRef);
         if (!string.IsNullOrEmpty(env)) return Task.FromResult<string?>(env);
+
+        // Also read appsettings.json or other config sources
+        var configValue = _configuration[secretRef];
+        if (!string.IsNullOrEmpty(configValue)) return Task.FromResult<string?>(configValue);
 
         if (_secrets.TryGetValue(secretRef, out var value)) return Task.FromResult<string?>(value);
 

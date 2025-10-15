@@ -12,18 +12,11 @@ public interface IFileProcessingService
     Task<Result> HandleAsync(FileEvent fileEvent, CancellationToken ct);
 }
 
-public sealed class FileProcessingService : IFileProcessingService
+public sealed class FileProcessingService(IFileProcessor fileProcessor, ILogger<FileProcessingService> logger, IFileProcessingTelemetry telemetry) : IFileProcessingService
 {
-    private readonly IFileProcessor _fileProcessor;
-    private readonly ILogger<FileProcessingService> _logger;
-    private readonly IFileProcessingTelemetry _telemetry;
-
-    public FileProcessingService(IFileProcessor fileProcessor, ILogger<FileProcessingService> logger, IFileProcessingTelemetry telemetry)
-    {
-        _fileProcessor = fileProcessor;
-        _logger = logger;
-        _telemetry = telemetry;
-    }
+    private readonly IFileProcessor _fileProcessor = fileProcessor;
+    private readonly ILogger<FileProcessingService> _logger = logger;
+    private readonly IFileProcessingTelemetry _telemetry = telemetry;
 
     public async Task<Result> HandleAsync(FileEvent fileEvent, CancellationToken ct)
     {
