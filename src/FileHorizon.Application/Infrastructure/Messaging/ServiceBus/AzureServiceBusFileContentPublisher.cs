@@ -20,6 +20,7 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
     private readonly bool _enabled;
     private readonly ILogger<AzureServiceBusFileContentPublisher> _logger;
     private readonly ServiceBusPublisherOptions _options;
+    private readonly IOptionsMonitor<DestinationsOptions>? _destinations; // optional for mapping logical destination -> entity name
     // Metrics instruments now attached to shared application meter (TelemetryInstrumentation.Meter)
     private static readonly Counter<long> _publishAttempts = TelemetryInstrumentation.Meter.CreateCounter<long>("servicebus.publish.attempts", description: "Number of publish attempts (including retries)");
     private static readonly Counter<long> _publishSuccesses = TelemetryInstrumentation.Meter.CreateCounter<long>("servicebus.publish.successes", description: "Number of successful publishes");
@@ -29,10 +30,12 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
 
     public AzureServiceBusFileContentPublisher(
         IOptions<ServiceBusPublisherOptions> options,
-        ILogger<AzureServiceBusFileContentPublisher> logger)
+        ILogger<AzureServiceBusFileContentPublisher> logger,
+        IOptionsMonitor<DestinationsOptions>? destinations = null)
     {
         _options = options.Value;
         _logger = logger;
+        _destinations = destinations; // may be null in isolated unit tests
 
         // Path 1: Connection string explicitly provided
         if (!string.IsNullOrWhiteSpace(_options.ConnectionString))
@@ -107,16 +110,19 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
             try
             {
                 _publishAttempts.Add(1, new KeyValuePair<string, object?>("destination", request.DestinationName));
-                var sender = _client!.CreateSender(request.DestinationName);
+                // Resolve actual entity name (queue or topic) from configuration if available.
+                // The request.DestinationName is a logical name; map to configured EntityName when present.
+                var entityName = ResolveEntityName(request.DestinationName) ?? request.DestinationName;
+                var sender = _client!.CreateSender(entityName);
                 var message = CreateMessage(request.Content, request);
                 await sender.SendMessageAsync(message, ct).ConfigureAwait(false);
                 if (attempt > 0)
                 {
-                    _logger.LogInformation("Published file {FileName} to {Destination} after {Attempts} attempt(s)", request.FileName, request.DestinationName, attempt + 1);
+                    _logger.LogInformation("Published file {FileName} to {Destination} (entity {Entity}) after {Attempts} attempt(s)", request.FileName, request.DestinationName, entityName, attempt + 1);
                 }
                 else
                 {
-                    _logger.LogDebug("Published file {FileName} to {Destination}", request.FileName, request.DestinationName);
+                    _logger.LogDebug("Published file {FileName} to {Destination} (entity {Entity})", request.FileName, request.DestinationName, entityName);
                 }
                 _publishSuccesses.Add(1, new KeyValuePair<string, object?>("destination", request.DestinationName));
                 return Result.Success();
@@ -151,6 +157,24 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
                 _publishFailures.Add(1, new KeyValuePair<string, object?>("destination", request.DestinationName));
                 return Result.Failure(Error.Messaging.PublishError(ex.Message));
             }
+        }
+    }
+
+    private string? ResolveEntityName(string logicalName)
+    {
+        try
+        {
+            var dests = _destinations?.CurrentValue.ServiceBus;
+            if (dests is null) return null;
+            var match = dests.FirstOrDefault(d => string.Equals(d.Name, logicalName, StringComparison.OrdinalIgnoreCase));
+            if (match is null) return null;
+            if (string.IsNullOrWhiteSpace(match.EntityName)) return null;
+            return match.EntityName;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed resolving entity name for logical destination {Destination}", logicalName);
+            return null; // fallback to logical name
         }
     }
 

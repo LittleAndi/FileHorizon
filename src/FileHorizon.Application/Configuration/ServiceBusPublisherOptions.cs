@@ -5,6 +5,8 @@ namespace FileHorizon.Application.Configuration;
 /// </summary>
 public sealed class ServiceBusPublisherOptions
 {
+    public const string SectionName = "ServiceBusPublisher";
+
     /// <summary>Connection string for Azure Service Bus or empty when using managed identity (future).</summary>
     public required string ConnectionString { get; init; }
 

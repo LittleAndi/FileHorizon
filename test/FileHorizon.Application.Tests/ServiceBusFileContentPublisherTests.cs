@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using FileHorizon.Application.Common;
+using NSubstitute;
 
 namespace FileHorizon.Application.Tests;
 
@@ -14,7 +15,16 @@ public class ServiceBusFileContentPublisherTests
     private AzureServiceBusFileContentPublisher CreatePublisher(string connection = "Endpoint=sb://localhost/;SharedAccessKeyName=Root;SharedAccessKey=Fake=")
     {
         var options = Options.Create(new ServiceBusPublisherOptions { ConnectionString = connection });
-        return new AzureServiceBusFileContentPublisher(options, NullLogger<AzureServiceBusFileContentPublisher>.Instance);
+        // Provide destinations options with a sample service bus destination so mapping can be exercised
+        var dests = Substitute.For<IOptionsMonitor<DestinationsOptions>>();
+        dests.CurrentValue.Returns(new DestinationsOptions
+        {
+            ServiceBus =
+            [
+                new ServiceBusDestinationOptions { Name = "queue1", EntityName = "queue1", IsTopic = false }
+            ]
+        });
+        return new AzureServiceBusFileContentPublisher(options, NullLogger<AzureServiceBusFileContentPublisher>.Instance, dests);
     }
 
     [Fact(Skip = "Requires live Service Bus or refactoring for mock client")]
