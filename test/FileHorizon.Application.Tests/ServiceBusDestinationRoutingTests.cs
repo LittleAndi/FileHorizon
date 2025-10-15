@@ -111,13 +111,6 @@ public class ServiceBusDestinationRoutingTests
         var ftpLogger = Substitute.For<ILogger<FtpRemoteFileClient>>();
         var orchestratorLogger = Substitute.For<ILogger<FileProcessingOrchestrator>>();
         var publisher = new FakePublisher();
-        var sbOpts = Substitute.For<IOptionsMonitor<ServiceBusPublisherOptions>>();
-        sbOpts.CurrentValue.Returns(new ServiceBusPublisherOptions
-        {
-            ConnectionString = "Endpoint=sb://dummy.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=FAKE=",
-            MaxConcurrentPublishes = 1,
-            EnableTracing = false
-        });
         // Publisher is fake; Azure client unused but options must exist for other registrations (not building DI here)
         var orchestrator = new FileProcessingOrchestrator(router, [reader], [sink], destOpts, idempOpts, remoteSources, idempStore, sftpFactory, secretResolver, sftpLogger, ftpLogger, publisher, new Infrastructure.Processing.ExtensionFileTypeDetector(), orchestratorLogger);
         var fe = new FileEvent(

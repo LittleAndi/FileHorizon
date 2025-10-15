@@ -19,7 +19,6 @@ builder.Services.Configure<DestinationsOptions>(builder.Configuration.GetSection
 builder.Services.Configure<RoutingOptions>(builder.Configuration.GetSection(RoutingOptions.SectionName));
 builder.Services.Configure<RemoteFileSourcesOptions>(builder.Configuration.GetSection(RemoteFileSourcesOptions.SectionName));
 builder.Services.Configure<TransferOptions>(builder.Configuration.GetSection(TransferOptions.SectionName));
-builder.Services.Configure<ServiceBusPublisherOptions>(builder.Configuration.GetSection(ServiceBusPublisherOptions.SectionName));
 
 builder.Services.AddHealthChecks();
 

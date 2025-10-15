@@ -14,17 +14,22 @@ public class ServiceBusFileContentPublisherTests
 {
     private AzureServiceBusFileContentPublisher CreatePublisher(string connection = "Endpoint=sb://localhost/;SharedAccessKeyName=Root;SharedAccessKey=Fake=")
     {
-        var options = Options.Create(new ServiceBusPublisherOptions { ConnectionString = connection });
-        // Provide destinations options with a sample service bus destination so mapping can be exercised
+        // Provide destinations options with a sample service bus destination including connection string so mapping can be exercised
         var dests = Substitute.For<IOptionsMonitor<DestinationsOptions>>();
         dests.CurrentValue.Returns(new DestinationsOptions
         {
             ServiceBus =
             [
-                new ServiceBusDestinationOptions { Name = "queue1", EntityName = "queue1", IsTopic = false }
-            ]
+                new ServiceBusDestinationOptions {
+                    Name = "queue1",
+                    EntityName = "queue1",
+                    IsTopic = false,
+                    ServiceBusTechnical = new ServiceBusTechnicalOptions { PublishRetryCount = 0, ConnectionString = connection }
+                }
+            ],
+
         });
-        return new AzureServiceBusFileContentPublisher(options, NullLogger<AzureServiceBusFileContentPublisher>.Instance, dests);
+        return new AzureServiceBusFileContentPublisher(NullLogger<AzureServiceBusFileContentPublisher>.Instance, dests);
     }
 
     [Fact(Skip = "Requires live Service Bus or refactoring for mock client")]

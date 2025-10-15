@@ -163,15 +163,13 @@ public static class ServiceCollectionExtensions
         });
 
         // Service Bus publisher options (bound in host via configuration). Conditionally register real publisher only when connection string present.
-        services.AddOptions<ServiceBusPublisherOptions>();
         services.AddSingleton<Abstractions.IFileContentPublisher>(sp =>
         {
-            var opts = sp.GetRequiredService<IOptions<ServiceBusPublisherOptions>>().Value;
+            var destOpts = sp.GetService<IOptionsMonitor<DestinationsOptions>>()?.CurrentValue;
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
-            // Enabled if either connection string or namespace present.
-            var hasCs = !string.IsNullOrWhiteSpace(opts.ConnectionString);
-            var hasNs = !string.IsNullOrWhiteSpace(opts.FullyQualifiedNamespace);
-            if (!hasCs && !hasNs)
+            var anyCs = destOpts?.ServiceBus.Any(d => !string.IsNullOrWhiteSpace(d.ServiceBusTechnical.ConnectionString)) == true;
+            var hasNs = !string.IsNullOrWhiteSpace(destOpts?.ServiceBus.First().ServiceBusTechnical.FullyQualifiedNamespace);
+            if (!anyCs && !hasNs)
             {
                 return new Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher(loggerFactory.CreateLogger<Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher>());
             }
