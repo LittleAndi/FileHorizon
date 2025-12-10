@@ -12,7 +12,7 @@ namespace FileHorizon.Application.Tests;
 
 public class ServiceBusFileContentPublisherTests
 {
-    private AzureServiceBusFileContentPublisher CreatePublisher(string connection = "Endpoint=sb://localhost/;SharedAccessKeyName=Root;SharedAccessKey=Fake=")
+    private AzureServiceBusFileContentPublisher CreatePublisher(string connection = "Endpoint=sb://localhost/;SharedAccessKeyName=Root;SharedAccessKey=Fake=", bool enableCompression = false)
     {
         // Provide destinations options with a sample service bus destination including connection string so mapping can be exercised
         var dests = Substitute.For<IOptionsMonitor<DestinationsOptions>>();
@@ -24,6 +24,7 @@ public class ServiceBusFileContentPublisherTests
                     Name = "queue1",
                     EntityName = "queue1",
                     IsTopic = false,
+                    EnableGzipCompression = enableCompression,
                     ServiceBusTechnical = new ServiceBusTechnicalOptions { PublishRetryCount = 0, ConnectionString = connection }
                 }
             ],
@@ -62,5 +63,15 @@ public class ServiceBusFileContentPublisherTests
         var result = await publisher.PublishAsync(req, CancellationToken.None);
         Assert.True(result.IsFailure);
         Assert.Equal("Messaging.ContentEmpty", result.Error.Code);
+    }
+
+    [Fact(Skip = "Requires live Service Bus or refactoring for mock client")]
+    public async Task Compression_Enabled_Publishes_Compressed_Content()
+    {
+        var publisher = CreatePublisher(enableCompression: true);
+        var content = Encoding.UTF8.GetBytes("hello world with lots of repeating text to compress well compress compress");
+        var req = new FilePublishRequest("/tmp", "test.txt", content, "text/plain", "queue1", false);
+        var result = await publisher.PublishAsync(req, CancellationToken.None);
+        Assert.True(result.IsSuccess);
     }
 }
