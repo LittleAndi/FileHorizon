@@ -168,7 +168,7 @@ public static class ServiceCollectionExtensions
             var destOpts = sp.GetService<IOptionsMonitor<DestinationsOptions>>()?.CurrentValue;
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
             var anyCs = destOpts?.ServiceBus.Any(d => !string.IsNullOrWhiteSpace(d.ServiceBusTechnical.ConnectionString)) == true;
-            var hasNs = !string.IsNullOrWhiteSpace(destOpts?.ServiceBus.First().ServiceBusTechnical.FullyQualifiedNamespace);
+            var hasNs = !string.IsNullOrWhiteSpace(destOpts?.ServiceBus.FirstOrDefault()?.ServiceBusTechnical.FullyQualifiedNamespace);
             if (!anyCs && !hasNs)
             {
                 return new Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher(loggerFactory.CreateLogger<Infrastructure.Messaging.ServiceBus.DisabledFileContentPublisher>());
