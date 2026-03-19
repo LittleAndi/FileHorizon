@@ -34,6 +34,40 @@ public sealed class ServiceBusDestinationOptions
     public string EntityName { get; set; } = string.Empty; // queue or topic name
     public bool IsTopic { get; set; } = false; // true if EntityName refers to a topic
     public string? ContentType { get; set; } // optional override for message content type, defaults to text/plain
+    public Dictionary<string, string>? ApplicationProperties { get; set; } // optional custom application properties to add to every message sent to this destination
+    
+    /// <summary>
+    /// Enable gzip compression for message bodies sent to this destination. Default is false.
+    /// When enabled, messages are compressed before sending and a 'Content-Encoding: gzip' header is added to application properties.
+    /// </summary>
+    /// <remarks>
+    /// Compression is beneficial for:
+    /// - Large text files (XML, JSON, CSV, log files)
+    /// - Repetitive data that compresses well
+    /// - Reducing bandwidth usage and Service Bus message size limits
+    /// 
+    /// Note: Small messages (< 1KB) may become larger due to gzip overhead.
+    /// Receivers must check the 'Content-Encoding' application property and decompress accordingly.
+    /// 
+    /// Example configuration:
+    /// <code>
+    /// "Destinations": {
+    ///   "ServiceBus": [{
+    ///     "Name": "LargeFilesQueue",
+    ///     "EntityName": "large-files",
+    ///     "EnableGzipCompression": true,
+    ///     "ServiceBusTechnical": {
+    ///       "ConnectionString": "Endpoint=sb://..."
+    ///     }
+    ///   }]
+    /// }
+    /// </code>
+    /// 
+    /// Environment variable:
+    /// Destinations__ServiceBus__0__EnableGzipCompression=true
+    /// </remarks>
+    public bool EnableGzipCompression { get; set; } = false;
+    
     public ServiceBusTechnicalOptions ServiceBusTechnical { get; set; } = new(); // destination specific Service Bus settings (retries, tracing, MI namespace)
 }
 
