@@ -232,6 +232,28 @@ public class DestinationsOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_ServiceBusDestination_NullServiceBusTechnical_Fails()
+    {
+        var options = new DestinationsOptions
+        {
+            ServiceBus =
+            [
+                new ServiceBusDestinationOptions
+                {
+                    Name = "TestQueue",
+                    EntityName = "test-queue",
+                    ServiceBusTechnical = null!
+                }
+            ]
+        };
+
+        var result = _validator.Validate(null, options);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("ServiceBusTechnical must be configured", result.FailureMessage);
+    }
+
+    [Fact]
     public void Validate_ServiceBusDestination_NoApplicationProperties_Succeeds()
     {
         var options = new DestinationsOptions

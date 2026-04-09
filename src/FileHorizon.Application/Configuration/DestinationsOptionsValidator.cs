@@ -56,11 +56,18 @@ public sealed class DestinationsOptionsValidator : IValidateOptions<Destinations
             if (string.IsNullOrWhiteSpace(d.EntityName)) errors.Add($"{prefix}: EntityName must be specified.");
             
             // Validate authentication configuration
-            var hasConnectionString = !string.IsNullOrWhiteSpace(d.ServiceBusTechnical.ConnectionString);
-            var hasNamespace = !string.IsNullOrWhiteSpace(d.ServiceBusTechnical.FullyQualifiedNamespace);
-            if (!hasConnectionString && !hasNamespace)
+            if (d.ServiceBusTechnical is null)
             {
-                errors.Add($"{prefix}: Either ServiceBusTechnical.ConnectionString or ServiceBusTechnical.FullyQualifiedNamespace must be specified.");
+                errors.Add($"{prefix}: ServiceBusTechnical must be configured.");
+            }
+            else
+            {
+                var hasConnectionString = !string.IsNullOrWhiteSpace(d.ServiceBusTechnical.ConnectionString);
+                var hasNamespace = !string.IsNullOrWhiteSpace(d.ServiceBusTechnical.FullyQualifiedNamespace);
+                if (!hasConnectionString && !hasNamespace)
+                {
+                    errors.Add($"{prefix}: Either ServiceBusTechnical.ConnectionString or ServiceBusTechnical.FullyQualifiedNamespace must be specified.");
+                }
             }
             
             // Validate ApplicationProperties for reserved keys

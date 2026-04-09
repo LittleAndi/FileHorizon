@@ -141,6 +141,7 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
                 _logger.LogDebug("Compressed {FileName} content from {OriginalSize} to {CompressedSize} bytes",
                     request.FileName, request.Content.Length, compressed.Length);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to compress content for {FileName}; sending uncompressed", request.FileName);
