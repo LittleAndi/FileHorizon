@@ -72,21 +72,21 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
         var validation = ValidateRequest(request);
         if (validation.IsFailure) return validation;
 
-        var (destination, entityName, tech) = ResolveContext(request.DestinationName);
+        var (destinationName, entityName, destination, tech) = ResolveContext(request.DestinationName);
         if (entityName is null)
         {
             return Result.Failure(Error.Messaging.PublishError("Destination entity not resolved"));
         }
-        var client = GetOrCreateClient(destination, tech);
+        var client = GetOrCreateClient(destinationName, tech);
         if (client is null)
         {
             return Result.Failure(Error.Messaging.PublishError("Service Bus client unavailable"));
         }
-        var semaphore = GetSemaphore(destination, tech.MaxConcurrentPublishes);
+        var semaphore = GetSemaphore(destinationName, tech.MaxConcurrentPublishes);
         await semaphore.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            return await SendWithRetryAsync(client, entityName, tech, request, ct).ConfigureAwait(false);
+            return await SendWithRetryAsync(client, entityName, destination, tech, request, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -107,25 +107,48 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
         return Result.Success();
     }
 
-    private (string destinationName, string? entityName, ServiceBusTechnicalOptions tech) ResolveContext(string logicalDestination)
+    private (string destinationName, string? entityName, ServiceBusDestinationOptions? destination, ServiceBusTechnicalOptions tech) ResolveContext(string logicalDestination)
     {
         var dest = ResolveDestination(logicalDestination);
         if (dest is null)
         {
             // Fallback: create ephemeral default technical options
-            return (logicalDestination, logicalDestination, new ServiceBusTechnicalOptions());
+            return (logicalDestination, logicalDestination, null, new ServiceBusTechnicalOptions());
         }
         var entityName = string.IsNullOrWhiteSpace(dest.EntityName) ? logicalDestination : dest.EntityName;
         var tech = dest.ServiceBusTechnical ?? new ServiceBusTechnicalOptions();
-        return (dest.Name, entityName, tech);
+        return (dest.Name, entityName, dest, tech);
     }
 
-    private async Task<Result> SendWithRetryAsync(ServiceBusClient client, string entityName, ServiceBusTechnicalOptions tech, FilePublishRequest request, CancellationToken ct)
+    private async Task<Result> SendWithRetryAsync(ServiceBusClient client, string entityName, ServiceBusDestinationOptions? destination, ServiceBusTechnicalOptions tech, FilePublishRequest request, CancellationToken ct)
     {
         var attempt = 0;
         var maxRetries = Math.Max(0, tech.PublishRetryCount);
         var baseDelay = TimeSpan.FromMilliseconds(Math.Max(0, tech.PublishRetryBaseDelayMs));
         var maxDelay = TimeSpan.FromMilliseconds(Math.Max(tech.PublishRetryBaseDelayMs, tech.PublishRetryMaxDelayMs));
+
+        // Apply compression if enabled
+        ReadOnlyMemory<byte> messageContent = request.Content;
+        var isCompressed = false;
+        var enableCompression = destination?.EnableGzipCompression ?? false;
+        if (enableCompression && !request.Content.IsEmpty)
+        {
+            try
+            {
+                var compressed = await CompressionHelper.CompressAsync(request.Content, ct).ConfigureAwait(false);
+                messageContent = compressed;
+                isCompressed = true;
+                _logger.LogDebug("Compressed {FileName} content from {OriginalSize} to {CompressedSize} bytes",
+                    request.FileName, request.Content.Length, compressed.Length);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to compress content for {FileName}; sending uncompressed", request.FileName);
+                // Continue with uncompressed content
+            }
+        }
+
         while (true)
         {
             ct.ThrowIfCancellationRequested();
@@ -133,7 +156,7 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
             {
                 _publishAttempts.Add(1, new KeyValuePair<string, object?>("destination", request.DestinationName));
                 var sender = client.CreateSender(entityName);
-                var message = CreateMessage(request.Content, request);
+                var message = CreateMessage(messageContent, request, isCompressed);
                 await sender.SendMessageAsync(message, ct).ConfigureAwait(false);
                 _publishSuccesses.Add(1, new KeyValuePair<string, object?>("destination", request.DestinationName));
                 LogPublishSuccess(request.FileName, request.DestinationName, entityName, attempt);
@@ -226,7 +249,7 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
         return _destinationConcurrency.GetOrAdd(destinationName, _ => new SemaphoreSlim(effective, effective));
     }
 
-    private static ServiceBusMessage CreateMessage(ReadOnlyMemory<byte> content, FilePublishRequest request)
+    private static ServiceBusMessage CreateMessage(ReadOnlyMemory<byte> content, FilePublishRequest request, bool isCompressed)
     {
         var message = new ServiceBusMessage(content);
         if (!string.IsNullOrWhiteSpace(request.ContentType))
@@ -240,6 +263,13 @@ public sealed class AzureServiceBusFileContentPublisher : IFileContentPublisher,
                 message.ApplicationProperties[kvp.Key] = kvp.Value;
             }
         }
+        
+        // Add compression indicator if content is compressed
+        if (isCompressed)
+        {
+            message.ApplicationProperties["Content-Encoding"] = "gzip";
+        }
+        
         message.Subject = request.FileName;
         return message;
     }

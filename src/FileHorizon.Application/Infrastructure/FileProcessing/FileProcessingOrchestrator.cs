@@ -118,12 +118,30 @@ public sealed class FileProcessingOrchestrator(
             }
         }
 
-        string? configuredContentType = _destinations.CurrentValue.ServiceBus
-            .FirstOrDefault(x => string.Equals(x.Name, plan.DestinationName, StringComparison.OrdinalIgnoreCase))?
-            .ContentType;
+        var destinationConfig = _destinations.CurrentValue.ServiceBus
+            .FirstOrDefault(x => string.Equals(x.Name, plan.DestinationName, StringComparison.OrdinalIgnoreCase));
+        
+        string? configuredContentType = destinationConfig?.ContentType;
         var detectedContentType = _fileTypeDetector.Detect(fileEvent.Metadata.SourcePath, sampleBuffer);
         var finalContentType = configuredContentType ?? detectedContentType ?? "application/octet-stream";
         publishActivity?.SetTag("messaging.content_type", finalContentType);
+        
+        // Build application properties: start with configured destination properties, then add runtime properties
+        var applicationProperties = new Dictionary<string, string>();
+        
+        // First: add configured custom properties from destination (if any)
+        if (destinationConfig?.ApplicationProperties is not null)
+        {
+            foreach (var kvp in destinationConfig.ApplicationProperties)
+            {
+                applicationProperties[kvp.Key] = kvp.Value;
+            }
+        }
+        
+        // Second: add runtime properties (these can override configured ones if keys collide)
+        applicationProperties["fh.fileId"] = fileEvent.Id;
+        applicationProperties["fh.protocol"] = fileEvent.Protocol;
+        
         var request = new FilePublishRequest(
             SourcePath: fileEvent.Metadata.SourcePath,
             FileName: Path.GetFileName(fileEvent.Metadata.SourcePath),
@@ -131,11 +149,7 @@ public sealed class FileProcessingOrchestrator(
             ContentType: finalContentType,
             DestinationName: plan.DestinationName,
             IsTopic: plan.IsTopic,
-            ApplicationProperties: new Dictionary<string, string>
-            {
-                ["fh.fileId"] = fileEvent.Id,
-                ["fh.protocol"] = fileEvent.Protocol
-            }
+            ApplicationProperties: applicationProperties
         );
         var publish = await _publisher.PublishAsync(request, ct).ConfigureAwait(false);
         if (publish.IsFailure)
