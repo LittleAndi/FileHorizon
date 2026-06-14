@@ -33,8 +33,7 @@ public sealed class FileProcessingService(IFileProcessor fileProcessor, ILogger<
         var freshRoot = new ActivityContext(
             ActivityTraceId.CreateRandom(),
             ActivitySpanId.CreateRandom(),
-            ActivityTraceFlags.Recorded,
-            isRemote: true);
+            ActivityTraceFlags.Recorded);
         using var activity = TelemetryInstrumentation.ActivitySource.StartActivity("file.process", ActivityKind.Internal, freshRoot);
         activity?.SetTag("file.id", fileEvent.Id);
         activity?.SetTag("file.protocol", fileEvent.Protocol);
