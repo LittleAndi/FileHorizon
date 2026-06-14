@@ -76,4 +76,41 @@ public sealed class FileProcessingServiceTelemetryTests
         Assert.Equal(1, telemetry.FailureCount);
         Assert.DoesNotContain(telemetry.DurationsMs, d => d <= 0);
     }
+
+    /// <summary>
+    /// Regression test for issue #22: files processed in the same batch must not share a trace-id.
+    /// The pipeline.lifetime activity is alive when background services run, so without an explicit
+    /// fresh root context each file.process span would inherit the same trace-id from that ambient
+    /// parent, causing Service Bus Diagnostic-Id to collide across files.
+    /// </summary>
+    [Fact]
+    public async Task TwoFilesInSameBatch_HaveDifferentTraceIds()
+    {
+        var telemetry = new FakeTelemetry();
+        var svc = new FileProcessingService(new SuccessProcessor(), NullLogger<FileProcessingService>.Instance, telemetry);
+
+        var traceIds = new List<ActivityTraceId>();
+
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = s => s.Name == TelemetryInstrumentation.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStarted = a =>
+            {
+                if (a.OperationName == "file.process")
+                    traceIds.Add(a.TraceId);
+            },
+            ActivityStopped = _ => { }
+        };
+        ActivitySource.AddActivityListener(activityListener);
+
+        // Simulate a batch-level ambient activity (pipeline.lifetime equivalent)
+        using var batchActivity = new ActivitySource("test.batch").StartActivity("batch");
+
+        await svc.HandleAsync(CreateEvent("fileA"), CancellationToken.None);
+        await svc.HandleAsync(CreateEvent("fileB"), CancellationToken.None);
+
+        Assert.Equal(2, traceIds.Count);
+        Assert.NotEqual(traceIds[0], traceIds[1]);
+    }
 }

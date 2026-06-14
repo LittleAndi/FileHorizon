@@ -23,7 +23,19 @@ public sealed class FileProcessingService(IFileProcessor fileProcessor, ILogger<
         _logger.LogDebug("Processing file event {FileId} protocol={Protocol} path={Path}", fileEvent.Id, fileEvent.Protocol, fileEvent.Metadata.SourcePath);
 
         var start = Stopwatch.GetTimestamp();
-        using var activity = TelemetryInstrumentation.ActivitySource.StartActivity("file.process", ActivityKind.Internal);
+
+        // Start a fresh root trace per file so that child spans (e.g. servicebus.publish)
+        // carry a unique trace-id. Without an explicit parent context, StartActivity inherits
+        // Activity.Current — which may be the long-lived pipeline.lifetime activity started in
+        // CompositeHostedService.StartAsync. That causes every file in a batch to share the
+        // same trace-id, making Service Bus Diagnostic-Id identical across files and collapsing
+        // independent Logic App runs into a single chain (issue #22).
+        var freshRoot = new ActivityContext(
+            ActivityTraceId.CreateRandom(),
+            ActivitySpanId.CreateRandom(),
+            ActivityTraceFlags.Recorded,
+            isRemote: true);
+        using var activity = TelemetryInstrumentation.ActivitySource.StartActivity("file.process", ActivityKind.Internal, freshRoot);
         activity?.SetTag("file.id", fileEvent.Id);
         activity?.SetTag("file.protocol", fileEvent.Protocol);
         activity?.SetTag("file.source_path", fileEvent.Metadata.SourcePath);
