@@ -105,7 +105,9 @@ public sealed class FileProcessingServiceTelemetryTests
         ActivitySource.AddActivityListener(activityListener);
 
         // Simulate a batch-level ambient activity (pipeline.lifetime equivalent)
-        using var batchActivity = new ActivitySource("test.batch").StartActivity("batch");
+        using var batchActivity = new Activity("pipeline.lifetime");
+        batchActivity.SetIdFormat(ActivityIdFormat.W3C);
+        batchActivity.Start();
 
         await svc.HandleAsync(CreateEvent("fileA"), CancellationToken.None);
         await svc.HandleAsync(CreateEvent("fileB"), CancellationToken.None);
