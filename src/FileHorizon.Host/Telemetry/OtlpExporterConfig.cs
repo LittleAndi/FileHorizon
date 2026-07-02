@@ -28,7 +28,12 @@ internal static class OtlpExporterConfig
     /// <summary>Applies endpoint, protocol and optional headers to an exporter options instance.</summary>
     public static void Apply(OtlpExporterOptions exporter, TelemetryOptions options)
     {
-        exporter.Endpoint = new Uri(options.OtlpEndpoint!);
+        if (!Uri.TryCreate(options.OtlpEndpoint, UriKind.Absolute, out var endpoint))
+        {
+            throw new InvalidOperationException($"Telemetry OTLP endpoint is invalid: '{options.OtlpEndpoint}'.");
+        }
+
+        exporter.Endpoint = endpoint;
         exporter.Protocol = ResolveProtocol(options);
         if (!string.IsNullOrWhiteSpace(options.OtlpHeaders))
         {
