@@ -374,7 +374,9 @@ public sealed class FileProcessingOrchestrator(
                 username: src.Username ?? string.Empty,
                 password,
                 null,
-                null
+                null,
+                hostKeyFingerprint: src.HostKeyFingerprint,
+                strictHostKey: src.StrictHostKey
             );
             await client.ConnectAsync(ct).ConfigureAwait(false);
             await client.DeleteAsync(remotePath, ct).ConfigureAwait(false);
@@ -399,7 +401,8 @@ public sealed class FileProcessingOrchestrator(
                 port: src.Port,
                 username: src.Username,
                 password: password,
-                passive: src.Passive
+                passive: src.Passive,
+                allowInvalidCertificate: src.AllowInvalidCertificate
             );
             await ftpClient.ConnectAsync(ct).ConfigureAwait(false);
             await ftpClient.DeleteAsync(remotePath, ct).ConfigureAwait(false);

@@ -10,7 +10,7 @@ namespace FileHorizon.Application.Infrastructure.Remote;
 /// FTP implementation of <see cref="IRemoteFileClient"/> using FluentFTP.
 /// Connection lifecycle: created per poll cycle (caller controls lifetime).
 /// </summary>
-public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, string host, int port, string? username, string? password, bool passive) : IRemoteFileClient
+public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, string host, int port, string? username, string? password, bool passive, bool allowInvalidCertificate = false) : IRemoteFileClient
 {
     private readonly ILogger<FtpRemoteFileClient> _logger = logger;
     private readonly string _host = host;
@@ -18,6 +18,7 @@ public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, str
     private readonly string? _username = string.IsNullOrWhiteSpace(username) ? "anonymous" : username;
     private readonly string? _password = password ?? "anonymous@"; // already resolved secret (host layer) when provided
     private readonly bool _passive = passive;
+    private readonly bool _allowInvalidCertificate = allowInvalidCertificate;
     private AsyncFtpClient? _client;
 
     public ProtocolType Protocol => ProtocolType.Ftp;
@@ -27,12 +28,16 @@ public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, str
     public async Task ConnectAsync(CancellationToken ct)
     {
         if (_client != null && _client.IsConnected) return;
+        if (_allowInvalidCertificate)
+        {
+            _logger.LogWarning("TLS certificate validation is disabled for FTP source {Host}:{Port} (AllowInvalidCertificate=true); the connection is not protected against man-in-the-middle attacks", _host, _port);
+        }
         var client = new AsyncFtpClient(_host, _username, _password, _port)
         {
             Config =
             {
                 DataConnectionType = _passive ? FtpDataConnectionType.PASV : FtpDataConnectionType.PORT,
-                ValidateAnyCertificate = true // TODO: optionally tighten later with configuration
+                ValidateAnyCertificate = _allowInvalidCertificate
             }
         };
         _client = client;

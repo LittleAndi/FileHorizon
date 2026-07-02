@@ -20,6 +20,8 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
     private readonly string? _password;
     private readonly string? _privateKeyPem;
     private readonly string? _privateKeyPassphrase;
+    private readonly string? _hostKeyFingerprint;
+    private readonly bool _strictHostKey;
     private SftpClient? _client;
 
     public SftpRemoteFileClient(
@@ -29,7 +31,9 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         string username,
         string? password,
         string? privateKeyPem,
-        string? privateKeyPassphrase)
+        string? privateKeyPassphrase,
+        string? hostKeyFingerprint = null,
+        bool strictHostKey = false)
     {
         _logger = logger;
         _host = host;
@@ -38,6 +42,8 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         _password = password;
         _privateKeyPem = privateKeyPem;
         _privateKeyPassphrase = privateKeyPassphrase;
+        _hostKeyFingerprint = hostKeyFingerprint;
+        _strictHostKey = strictHostKey;
     }
 
     public ProtocolType Protocol => ProtocolType.Sftp;
@@ -63,15 +69,22 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
 
     private SftpClient CreateClient()
     {
+        SftpClient client;
         if (!string.IsNullOrWhiteSpace(_privateKeyPem))
         {
             using var keyStream = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(_privateKeyPem));
             PrivateKeyFile pkFile = string.IsNullOrWhiteSpace(_privateKeyPassphrase)
                 ? new PrivateKeyFile(keyStream)
                 : new PrivateKeyFile(keyStream, _privateKeyPassphrase);
-            return new SftpClient(_host, _port, _username, new PrivateKeyFile[] { pkFile });
+            client = new SftpClient(_host, _port, _username, new PrivateKeyFile[] { pkFile });
         }
-        return new SftpClient(_host, _port, _username, _password ?? string.Empty);
+        else
+        {
+            client = new SftpClient(_host, _port, _username, _password ?? string.Empty);
+        }
+        client.HostKeyReceived += (_, e) =>
+            e.CanTrust = SshHostKeyValidator.Validate(_logger, _host, _port, _hostKeyFingerprint, _strictHostKey, e.HostKeyName, e.HostKey);
+        return client;
     }
 
     public async IAsyncEnumerable<IRemoteFileInfo> ListFilesAsync(string path, bool recursive, string pattern, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)

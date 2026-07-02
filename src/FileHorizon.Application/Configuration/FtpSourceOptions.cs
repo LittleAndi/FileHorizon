@@ -13,6 +13,12 @@ public sealed class FtpSourceOptions
     public bool Recursive { get; set; } = true;
     public int MinStableSeconds { get; set; } = 2; // stability window before considering file ready
     public bool Passive { get; set; } = true; // FTP passive mode
+    /// <summary>
+    /// If true, accept any TLS certificate presented by the server (self-signed, expired, wrong host).
+    /// SECURITY: this disables man-in-the-middle protection for FTPS. Leave false (the default) unless
+    /// connecting to a legacy server on a trusted network where certificate validation is impossible.
+    /// </summary>
+    public bool AllowInvalidCertificate { get; set; } = false;
     public string? Username { get; set; }
     public string? PasswordSecretRef { get; set; } // Key Vault or external secret reference; resolved in Host layer
     public string? DestinationPath { get; set; } // Optional override destination root
