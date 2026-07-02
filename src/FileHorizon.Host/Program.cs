@@ -1,6 +1,7 @@
 using FileHorizon.Application;
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Common.Telemetry;
+using FileHorizon.Host.Telemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -27,6 +28,9 @@ builder.Services.Configure<TelemetryOptions>(builder.Configuration.GetSection(Te
 
 var telemetryOptions = builder.Configuration.GetSection(TelemetryOptions.SectionName).Get<TelemetryOptions>() ?? new TelemetryOptions();
 
+// gRPC over a plaintext http:// endpoint needs HTTP/2 cleartext (h2c) support enabled at the runtime level.
+OtlpExporterConfig.EnableInsecureGrpcIfNeeded(telemetryOptions);
+
 // Configure OpenTelemetry (Tracing, Metrics, Logging)
 var resourceBuilder = ResourceBuilder.CreateDefault()
     .AddService(
@@ -47,6 +51,10 @@ if (telemetryOptions.EnableLogging)
         o.ParseStateValues = true;
         o.IncludeFormattedMessage = true;
         o.SetResourceBuilder(resourceBuilder);
+        if (OtlpExporterConfig.IsEnabled(telemetryOptions))
+        {
+            o.AddOtlpExporter(exp => OtlpExporterConfig.Apply(exp, telemetryOptions));
+        }
     });
 }
 
@@ -75,35 +83,26 @@ builder.Services.AddOpenTelemetry()
         {
             metrics.AddPrometheusExporter();
         }
-        if (telemetryOptions.EnableOtlpExporter && telemetryOptions.OtlpEndpoint is not null)
+        if (OtlpExporterConfig.IsEnabled(telemetryOptions))
         {
-            metrics.AddOtlpExporter(opt =>
-            {
-                opt.Endpoint = new Uri(telemetryOptions.OtlpEndpoint);
-                if (!string.IsNullOrWhiteSpace(telemetryOptions.OtlpHeaders))
-                {
-                    opt.Headers = telemetryOptions.OtlpHeaders;
-                }
-            });
+            metrics.AddOtlpExporter(opt => OtlpExporterConfig.Apply(opt, telemetryOptions));
         }
     })
     .WithTracing(tracing =>
     {
         if (!telemetryOptions.EnableTracing) return;
         tracing.SetResourceBuilder(resourceBuilder);
+        // Default to sampling everything; a configured ratio applies a parent-based ratio sampler.
+        if (telemetryOptions.TracesSampleRatio is { } ratio)
+        {
+            tracing.SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(ratio)));
+        }
         tracing.AddAspNetCoreInstrumentation();
         tracing.AddHttpClientInstrumentation();
         tracing.AddSource(TelemetryInstrumentation.ActivitySourceName);
-        if (telemetryOptions.EnableOtlpExporter && telemetryOptions.OtlpEndpoint is not null)
+        if (OtlpExporterConfig.IsEnabled(telemetryOptions))
         {
-            tracing.AddOtlpExporter(opt =>
-            {
-                opt.Endpoint = new Uri(telemetryOptions.OtlpEndpoint);
-                if (!string.IsNullOrWhiteSpace(telemetryOptions.OtlpHeaders))
-                {
-                    opt.Headers = telemetryOptions.OtlpHeaders;
-                }
-            });
+            tracing.AddOtlpExporter(opt => OtlpExporterConfig.Apply(opt, telemetryOptions));
         }
     });
 

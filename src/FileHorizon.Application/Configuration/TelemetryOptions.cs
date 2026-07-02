@@ -13,7 +13,11 @@ public sealed class TelemetryOptions
     // OTLP specific
     public string? OtlpEndpoint { get; init; }
     public string? OtlpHeaders { get; init; } // semicolon or comma separated key=value list
-    public bool OtlpInsecure { get; init; } = false;
+    public bool OtlpInsecure { get; init; } = false; // allow gRPC over plaintext http:// (enables HTTP/2 cleartext)
+    public string? OtlpProtocol { get; init; } // "Grpc" (default) or "HttpProtobuf"
+
+    // Tracing
+    public double? TracesSampleRatio { get; init; } // null => sample everything; 0..1 => parent-based ratio sampler
 
     // General resource attributes
     public string? ServiceName { get; init; } // override default
