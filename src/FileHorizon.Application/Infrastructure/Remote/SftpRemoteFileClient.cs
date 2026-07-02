@@ -53,17 +53,24 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
     public Task ConnectAsync(CancellationToken ct)
     {
         if (_client != null && _client.IsConnected) return Task.CompletedTask;
+        if (_client != null)
+        {
+            _client.Dispose();
+            _client = null;
+        }
 
-        _client = CreateClient();
+        var client = CreateClient();
         try
         {
-            _client.Connect();
+            client.Connect();
         }
         catch (Exception ex)
         {
+            client.Dispose();
             _logger.LogWarning(ex, "SFTP connect failed to {Host}:{Port}", _host, _port);
             throw;
         }
+        _client = client;
         return Task.CompletedTask;
     }
 

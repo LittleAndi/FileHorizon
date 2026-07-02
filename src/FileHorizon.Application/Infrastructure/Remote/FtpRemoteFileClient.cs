@@ -28,6 +28,11 @@ public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, str
     public async Task ConnectAsync(CancellationToken ct)
     {
         if (_client != null && _client.IsConnected) return;
+        if (_client != null)
+        {
+            _client.Dispose();
+            _client = null;
+        }
         if (_allowInvalidCertificate)
         {
             _logger.LogWarning("TLS certificate validation is disabled for FTP source {Host}:{Port} (AllowInvalidCertificate=true); the connection is not protected against man-in-the-middle attacks", _host, _port);
@@ -40,16 +45,17 @@ public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, str
                 ValidateAnyCertificate = _allowInvalidCertificate
             }
         };
-        _client = client;
         try
         {
             await client.Connect(ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
+            client.Dispose();
             _logger.LogWarning(ex, "FTP connect failed to {Host}:{Port}", _host, _port);
             throw;
         }
+        _client = client;
     }
 
     public async IAsyncEnumerable<IRemoteFileInfo> ListFilesAsync(string path, bool recursive, string pattern, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
