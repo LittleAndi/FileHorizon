@@ -95,6 +95,11 @@ builder.Services.AddOpenTelemetry()
         // Default to sampling everything; a configured ratio applies a parent-based ratio sampler.
         if (telemetryOptions.TracesSampleRatio is { } ratio)
         {
+            if (ratio is < 0 or > 1)
+            {
+                throw new InvalidOperationException($"Telemetry:TracesSampleRatio must be between 0 and 1, but was {ratio}.");
+            }
+
             tracing.SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(ratio)));
         }
         tracing.AddAspNetCoreInstrumentation();
