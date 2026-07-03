@@ -121,6 +121,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<Configuration.RoutingOptions>, Configuration.RoutingOptionsValidator>();
         services.AddOptions<Configuration.TransferOptions>();
         services.AddSingleton<IValidateOptions<Configuration.TransferOptions>, Configuration.TransferOptionsValidator>();
+        services.AddOptions<Configuration.TelemetryOptions>();
+        services.AddSingleton<IValidateOptions<Configuration.TelemetryOptions>, Configuration.TelemetryOptionsValidator>();
         services.AddOptions<Configuration.IdempotencyOptions>();
         services.AddOptions<Configuration.ContentDetectionOptions>();
 

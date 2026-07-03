@@ -12,8 +12,7 @@ public sealed class TelemetryOptions
 
     // OTLP specific
     public string? OtlpEndpoint { get; init; }
-    public string? OtlpHeaders { get; init; } // semicolon or comma separated key=value list
-    public bool OtlpInsecure { get; init; } = false; // allow gRPC over plaintext http:// (enables HTTP/2 cleartext)
+    public string? OtlpHeaders { get; init; } // comma separated key=value list (OTLP spec format, e.g. "key1=v1,key2=v2")
     public string? OtlpProtocol { get; init; } // "Grpc" (default) or "HttpProtobuf"
 
     // Tracing

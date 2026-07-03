@@ -669,8 +669,7 @@ If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus
 | `EnableOtlpExporter`    | false                  | Enable OTLP exporter for traces/metrics/logs                   |
 | `OtlpEndpoint`          | null                   | OTLP endpoint (e.g. `http://otel-collector:4317` for gRPC)     |
 | `OtlpProtocol`          | Grpc                   | Wire protocol: `Grpc` (port 4317) or `HttpProtobuf` (port 4318)|
-| `OtlpHeaders`           | null                   | Additional OTLP headers (key=value;key2=value2)                |
-| `OtlpInsecure`          | false                  | Allow gRPC over plaintext `http://` (enables HTTP/2 cleartext) |
+| `OtlpHeaders`           | null                   | Additional OTLP headers, comma separated (key=value,key2=value2) |
 | `TracesSampleRatio`     | null                   | null = sample all; `0..1` = parent-based ratio sampler         |
 | `ServiceName`           | FileHorizon            | Override service.name resource attribute                       |
 | `ServiceVersion`        | Assembly version       | Override service.version                                       |
@@ -701,10 +700,11 @@ Telemetry__OtlpProtocol=HttpProtobuf
 Telemetry__OtlpEndpoint=http://otel-collector:4318
 ```
 
-If headers are required (e.g. an authenticating gateway):
+If headers are required (e.g. an authenticating gateway), supply them comma separated
+(the OTLP spec format — semicolons are not recognized as separators):
 
 ```
-Telemetry__OtlpHeaders=api-key=XYZ123
+Telemetry__OtlpHeaders=api-key=XYZ123,tenant=abc
 ```
 
 All three signals — traces, metrics and logs — are exported to the same endpoint. This
@@ -712,8 +712,8 @@ suits a collector-based topology where the collector fans out to backends (e.g. 
 everything to Elasticsearch). Providers are flushed on graceful shutdown by the
 `OpenTelemetry.Extensions.Hosting` integration.
 
-If the collector only accepts plaintext gRPC (no TLS), set `Telemetry__OtlpInsecure=true`;
-this enables the runtime's HTTP/2-cleartext (h2c) support required for gRPC over `http://`.
+A plaintext (no TLS) `http://` endpoint works out of the box for both protocols — on
+.NET 8 the runtime supports HTTP/2 cleartext (h2c) for gRPC without any opt-in switch.
 
 ### Docker Compose Example (Prometheus + Collector)
 
