@@ -105,6 +105,10 @@ public sealed class RemoteFileSourcesOptionsValidator : IValidateOptions<RemoteF
                 {
                     errors.Add($"{prefix}: PrivateKeyPassphraseSecretRef specified but PrivateKeySecretRef is missing.");
                 }
+                if (sftp.StrictHostKey && string.IsNullOrWhiteSpace(sftp.HostKeyFingerprint))
+                {
+                    errors.Add($"{prefix}: StrictHostKey is enabled but HostKeyFingerprint is not configured; connections would always be rejected.");
+                }
             }
         }
 

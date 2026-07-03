@@ -37,7 +37,7 @@ public sealed class FtpPoller(IFileEventQueue queue,
             // Best effort sync wait kept minimal because remote poll cycle is already async. We design secret resolution to be fast/cached.
             password = _secretResolver.ResolveSecretAsync(s.PasswordSecretRef).GetAwaiter().GetResult();
         }
-        return new FtpRemoteFileClient(_loggerFactory.CreateLogger<FtpRemoteFileClient>(), s.Host, s.Port, s.Username, password, s.Passive);
+        return new FtpRemoteFileClient(_loggerFactory.CreateLogger<FtpRemoteFileClient>(), s.Host, s.Port, s.Username, password, s.Passive, s.AllowInvalidCertificate);
     }
 
     protected override ProtocolType MapProtocolType(ProtocolType protocol) => ProtocolType.Ftp;

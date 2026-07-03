@@ -57,7 +57,9 @@ public sealed class SftpPoller(IFileEventQueue queue,
             s.Username ?? string.Empty,
             password,
             privateKey,
-            passphrase);
+            passphrase,
+            s.HostKeyFingerprint,
+            s.StrictHostKey);
     }
 
     protected override ProtocolType MapProtocolType(ProtocolType protocol) => ProtocolType.Sftp;

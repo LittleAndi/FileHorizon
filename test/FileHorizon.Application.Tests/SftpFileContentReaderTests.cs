@@ -24,7 +24,7 @@ public sealed class SftpFileContentReaderTests
     {
         private readonly ISftpClient _client;
         public FakeFactory(ISftpClient client) { _client = client; }
-        public ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase) => _client;
+        public ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, string? hostKeyFingerprint = null, bool strictHostKey = false) => _client;
     }
 
     [Fact]

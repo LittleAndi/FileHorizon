@@ -10,7 +10,7 @@ public sealed class SshNetSftpClientFactory(ILogger<SshNetSftpClientFactory> log
 {
     private readonly ILogger<SshNetSftpClientFactory> _logger = logger;
 
-    public FileHorizon.Application.Abstractions.ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase)
+    public FileHorizon.Application.Abstractions.ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, string? hostKeyFingerprint = null, bool strictHostKey = false)
     {
         // Build ConnectionInfo
         ConnectionInfo connInfo;
@@ -30,6 +30,8 @@ public sealed class SshNetSftpClientFactory(ILogger<SshNetSftpClientFactory> log
         }
 
         var client = new SftpClient(connInfo);
+        client.HostKeyReceived += (_, e) =>
+            e.CanTrust = SshHostKeyValidator.Validate(_logger, host, port, hostKeyFingerprint, strictHostKey, e.HostKeyName, e.HostKey);
         return new SshNetSftpClientWrapper(_logger, client);
     }
 

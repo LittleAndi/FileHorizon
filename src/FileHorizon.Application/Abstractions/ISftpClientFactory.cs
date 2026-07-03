@@ -15,6 +15,8 @@ public interface ISftpClientFactory
 {
     /// <summary>
     /// Create an SFTP client using either password or private key authentication. One of password or privateKeyPem must be provided.
+    /// When <paramref name="hostKeyFingerprint"/> is set, the server host key must match it or the connection is rejected.
+    /// When <paramref name="strictHostKey"/> is true and no fingerprint is configured, the connection is rejected.
     /// </summary>
-    ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase);
+    ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, string? hostKeyFingerprint = null, bool strictHostKey = false);
 }
