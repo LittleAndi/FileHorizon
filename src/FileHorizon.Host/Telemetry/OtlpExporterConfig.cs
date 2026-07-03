@@ -59,9 +59,14 @@ internal static class OtlpExporterConfig
 
     private static Uri AppendPathIfNotPresent(Uri endpoint, string signalPath)
     {
-        var absolute = endpoint.AbsoluteUri.TrimEnd('/');
-        return absolute.EndsWith("/" + signalPath, StringComparison.OrdinalIgnoreCase)
-            ? endpoint
-            : new Uri(absolute + "/" + signalPath);
+        var builder = new UriBuilder(endpoint);
+        var path = builder.Path.TrimEnd('/');
+        if (path.EndsWith("/" + signalPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return endpoint;
+        }
+
+        builder.Path = path + "/" + signalPath;
+        return builder.Uri;
     }
 }
