@@ -42,12 +42,12 @@ public sealed class SimpleFileRouter(
                 }
             }
             var fileName = Path.GetFileName(fileEvent.Metadata.SourcePath);
-            var renamePattern = rule.RenamePattern;
-            var targetName = ApplyRename(fileName, renamePattern);
+            // The router is the single owner of RenamePattern: it is applied here to TargetPath and
+            // must not be re-applied by sinks (double application expands tokens twice, see #29).
+            var targetName = ApplyRename(fileName, rule.RenamePattern);
             var writeOptions = new FileWriteOptions(
                 Overwrite: rule.Overwrite ?? false,
-                ComputeHash: false,
-                RenamePattern: renamePattern);
+                ComputeHash: false);
 
             var plan = new DestinationPlan(destinationName, targetName, writeOptions, kind, isTopic);
             _logger.LogDebug("Router matched rule {Rule} -> {Destination}", rule.Name, destinationName);

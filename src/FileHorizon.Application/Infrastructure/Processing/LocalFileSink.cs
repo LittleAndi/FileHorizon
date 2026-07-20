@@ -21,7 +21,7 @@ public sealed class LocalFileSink(ILogger<LocalFileSink> logger) : IFileSink
                 return Result.Failure(Error.Validation.Invalid($"LocalFileSink received non-local scheme '{target.Scheme}'"));
             }
 
-            var destPath = ApplyRename(target.Path, options?.RenamePattern);
+            var destPath = target.Path;
             var dir = Path.GetDirectoryName(destPath);
             if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
             {
@@ -56,17 +56,5 @@ public sealed class LocalFileSink(ILogger<LocalFileSink> logger) : IFileSink
             _logger.LogError(ex, "Unexpected error writing to {Path}", target.Path);
             return Result.Failure(Error.Unspecified("LocalSink.Unexpected", ex.Message));
         }
-    }
-
-    private static string ApplyRename(string path, string? renamePattern)
-    {
-        if (string.IsNullOrWhiteSpace(renamePattern)) return path;
-        var fileName = Path.GetFileName(path);
-        var date = DateTimeOffset.UtcNow;
-        var replaced = renamePattern
-            .Replace("{fileName}", fileName)
-            .Replace("{yyyyMMdd}", date.ToString("yyyyMMdd"));
-        var dir = Path.GetDirectoryName(path) ?? string.Empty;
-        return Path.Combine(dir, replaced);
     }
 }

@@ -103,6 +103,87 @@ public class FileProcessingOrchestratorTests
         try { Directory.Delete(destRoot, true); } catch { }
     }
 
+    [Fact]
+    public async Task ProcessAsync_AppliesRenamePattern_ExactlyOnce()
+    {
+        // Regression test for #29: with a non-idempotent pattern the router and the sink each
+        // applying RenamePattern produced names like "20250101-20250101-file.txt".
+        var srcFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".txt");
+        var destRoot = Path.Combine(Path.GetTempPath(), "orchestrator-tests", Guid.NewGuid().ToString("N"));
+        await File.WriteAllTextAsync(srcFile, "hello world");
+
+        var ev = new FileEvent(
+            Id: Guid.NewGuid().ToString("N"),
+            Metadata: new FileMetadata(srcFile, new FileInfo(srcFile).Length, DateTimeOffset.UtcNow, "none", null),
+            DiscoveredAtUtc: DateTimeOffset.UtcNow,
+            Protocol: "local",
+            DestinationPath: string.Empty,
+            DeleteAfterTransfer: false);
+
+        var routing = new RoutingOptions
+        {
+            Rules =
+            [
+                new RoutingRuleOptions
+                {
+                    Name = "local",
+                    Protocol = "local",
+                    PathGlob = "**/*.txt",
+                    Destinations = ["OutboxA"],
+                    Overwrite = true,
+                    RenamePattern = "{yyyyMMdd}-{fileName}"
+                }
+            ]
+        };
+        var destinations = new DestinationsOptions
+        {
+            Local =
+            [
+                new LocalDestinationOptions { Name = "OutboxA", RootPath = destRoot }
+            ]
+        };
+        var router = new Infrastructure.Processing.SimpleFileRouter(
+            routingOptions: new StaticOptionsMonitor<RoutingOptions>(routing),
+            destinationsOptions: new StaticOptionsMonitor<DestinationsOptions>(destinations),
+            logger: NullLogger<Infrastructure.Processing.SimpleFileRouter>.Instance
+        );
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
+        var orchestrator = new FileProcessingOrchestrator(
+            router: router,
+            readers: [new Infrastructure.Processing.LocalFileContentReader(NullLogger<Infrastructure.Processing.LocalFileContentReader>.Instance)],
+            sinks: [new Infrastructure.Processing.LocalFileSink(NullLogger<Infrastructure.Processing.LocalFileSink>.Instance)],
+            destinations: new StaticOptionsMonitor<DestinationsOptions>(destinations),
+            idempotencyOptions: new StaticOptionsMonitor<IdempotencyOptions>(new IdempotencyOptions { Enabled = false }),
+            remoteSources: new StaticOptionsMonitor<RemoteFileSourcesOptions>(new RemoteFileSourcesOptions()),
+            idempotencyStore: new Infrastructure.Idempotency.InMemoryIdempotencyStore(),
+            sftpFactory: new Infrastructure.Remote.SshNetSftpClientFactory(NullLogger<Infrastructure.Remote.SshNetSftpClientFactory>.Instance),
+            secretResolver: new Infrastructure.Secrets.InMemorySecretResolver(configuration, NullLogger<Infrastructure.Secrets.InMemorySecretResolver>.Instance),
+            sftpClientLogger: NullLogger<Infrastructure.Remote.SftpRemoteFileClient>.Instance,
+            ftpClientLogger: NullLogger<Infrastructure.Remote.FtpRemoteFileClient>.Instance,
+            publisher: new FakePublisher(),
+            fileTypeDetector: new Infrastructure.Processing.ExtensionFileTypeDetector(),
+            logger: NullLogger<FileProcessingOrchestrator>.Instance
+        );
+
+        try
+        {
+            var res = await orchestrator.ProcessAsync(ev, CancellationToken.None);
+            Assert.True(res.IsSuccess);
+
+            var date = DateTimeOffset.UtcNow.ToString("yyyyMMdd");
+            var expected = Path.Combine(destRoot, $"{date}-{Path.GetFileName(srcFile)}");
+            var written = Directory.GetFiles(destRoot);
+            Assert.Single(written);
+            Assert.Equal(expected, written[0]);
+        }
+        finally
+        {
+            try { File.Delete(srcFile); } catch { }
+            try { Directory.Delete(destRoot, true); } catch { }
+        }
+    }
+
     private sealed class FakePublisher : IFileContentPublisher
     {
         public bool Called { get; private set; }
