@@ -25,13 +25,26 @@ public sealed class RedisIdempotencyStore : IIdempotencyStore, IDisposable
         _db = _connection.GetDatabase();
     }
 
-    public async Task<bool> TryMarkProcessedAsync(string key, TimeSpan? ttl, CancellationToken ct)
+    public async Task<bool> IsProcessedAsync(string key, CancellationToken ct)
     {
-        var expiry = ttl ?? TimeSpan.FromHours(24);
         try
         {
-            // SET key value NX EX seconds
-            var ok = await _db.StringSetAsync(key, "1", expiry, When.NotExists).ConfigureAwait(false);
+            return await _db.KeyExistsAsync(key).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Fail open: a store outage must never permanently suppress a transfer.
+            _logger.LogWarning(ex, "Redis idempotency EXISTS failed for {Key}; treating as not processed", key);
+            return false;
+        }
+    }
+
+    public async Task<bool> TryMarkProcessedAsync(string key, TimeSpan? ttl, CancellationToken ct)
+    {
+        try
+        {
+            // SET key value NX [EX seconds]; a null ttl omits EX so the marker never expires.
+            var ok = await _db.StringSetAsync(key, "1", ttl, When.NotExists).ConfigureAwait(false);
             return ok;
         }
         catch (Exception ex)

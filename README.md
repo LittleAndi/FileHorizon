@@ -169,7 +169,7 @@ Key pieces:
 - Readers: `local`, `sftp` (FTP reader pending). The orchestrator selects by `FileReference.Protocol`.
 - Router: Matches by protocol and path into a single destination (current implementation is 1:1).
 - Sinks: Currently local filesystem sink; remote sinks can be added later.
-- Idempotency: Prevents duplicate processing (in-memory or Redis-backed store).
+- Idempotency: Prevents duplicate transfers across restarts. Files are tracked by identity (`SourcePath|SizeBytes|LastModifiedUtc`, prefixed `fh:idemp:v2:`), so a modified file counts as a new version and is transferred again. The marker is written only after a successful transfer (a failed or crashed transfer is retried, never permanently suppressed). Store selection: Redis (if `Redis:Enabled`) → file-backed JSONL (if `Idempotency:DataDirectory` is set) → in-memory (non-durable).
 
 ### Source File Deletion (Event-Driven)
 
@@ -238,11 +238,12 @@ Example `appsettings.json` excerpt:
     ]
   },
   "Transfer": {
-    "ChunkSizeBytes": 32768,
-    "Idempotency": {
-      "Enabled": true,
-      "TtlSeconds": 86400
-    }
+    "ChunkSizeBytes": 32768
+  },
+  "Idempotency": {
+    "Enabled": true,
+    "TtlSeconds": 0,
+    "DataDirectory": "/var/lib/filehorizon"
   }
 }
 ```
@@ -259,14 +260,17 @@ Routing__Rules__0__Match__PathPattern=^/data/inboxA/.+\.txt$
 Routing__Rules__0__Destination=OutboxA
 
 Transfer__ChunkSizeBytes=32768
-Transfer__Idempotency__Enabled=true
-Transfer__Idempotency__TtlSeconds=86400
+Idempotency__Enabled=true
+Idempotency__TtlSeconds=0
+Idempotency__DataDirectory=/var/lib/filehorizon
 ```
 
 Notes:
 
 - On Windows, paths are normalized internally; the router matches against a normalized forward-slash path.
-- If Redis is enabled (`Redis__Enabled=true`), the idempotency store uses Redis with TTL; otherwise an in-memory store is used.
+- `Idempotency` is a top-level section (not nested under `Transfer`). `TtlSeconds=0` (the default) keeps processed-file markers forever — required for sources that keep files in place (`DeleteAfterTransfer=false`); a positive value expires markers after that many seconds.
+- Idempotency store selection: Redis when `Redis__Enabled=true`; otherwise a durable file-backed store (`idempotency.jsonl` under `Idempotency__DataDirectory`) when that directory is set; otherwise in-memory (markers do not survive restarts — a warning is logged if idempotency is enabled in this state).
+- The file-backed store grows a small line per transferred file, unbounded under indefinite retention. Deleting the file while the service is stopped resets tracking and causes at most one re-transfer per still-present source file.
 - Current sink support is local filesystem; remote sinks may be added in future.
 
 For a deeper overview see `docs/processing-architecture.md`.
@@ -625,8 +629,7 @@ Recently completed (this branch): FTP & SFTP pollers, feature flags, remote read
 
 Upcoming / still planned:
 
-- Persistent idempotency & deduplication registry (Redis / durable store)
-- Message claiming / retry hardening for Redis Streams
+- Message claiming / retry hardening for Redis Streams (queue still ACKs on read)
 - Service Bus ingress / egress bridge
 - Extended telemetry (error categorization, size histograms)
 - Configurable secret resolver (production Key Vault implementation)

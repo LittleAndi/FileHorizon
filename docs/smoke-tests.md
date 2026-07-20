@@ -91,8 +91,8 @@ Notes
 
 - Orchestrator currently uses only the first matching destination (single-destination routing). Fan-out is planned.
 - Paths in rules/globs are OS-dependent; Windows paths are normalized internally for glob matching.
-- Idempotency: enable durable suppression by setting `Idempotency__Enabled=true` (backed by Redis or in-memory depending on configuration). Key currently uses the event Id; a richer identity hash is planned.
-- Redis queue + idempotency: set `Redis__Enabled=true` to activate Redis Streams + Redis-backed idempotency (if provided). Otherwise an in-memory queue/idempotency store is used (non-durable across restarts).
+- Idempotency: enable durable suppression by setting `Idempotency__Enabled=true`. Files are keyed by identity (source path + size + mtime), marked only after a successful transfer, and kept forever by default (`Idempotency__TtlSeconds=0`). Without Redis, set `Idempotency__DataDirectory=<dir>` to persist markers to `idempotency.jsonl` so they survive restarts.
+- Redis queue + idempotency: set `Redis__Enabled=true` to activate Redis Streams + Redis-backed idempotency. Otherwise the file-backed store is used when `Idempotency__DataDirectory` is set, else an in-memory store (non-durable across restarts).
 - Quick metrics checks (PowerShell):
   - `curl http://localhost:8080/metrics | Select-String files_processed`
   - `curl http://localhost:8080/metrics | Select-String poll_cycles`

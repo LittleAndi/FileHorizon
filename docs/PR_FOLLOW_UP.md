@@ -7,7 +7,7 @@ Recommended GitHub issues to open after syncing architecture & roadmap docs.
 | feat: implement multi-destination fan-out | enhancement,processing  | Add loop over all routed DestinationPlans with configurable failure policy (strict vs partial).                |
 | feat: add per-destination retry policies  | enhancement,reliability | Introduce retry/backoff options section under TransferOptions for sink writes.                                 |
 | feat: introduce SFTP sink                 | enhancement,integration | Implement IFileSink for SFTP uploads (upload + mkdir -p semantics, host key verification).                     |
-| feat: enhanced idempotency key            | enhancement,idempotency | Derive composite hash (protocol+normalized path+size+mtime+routing fingerprint); migrate existing keys safely. |
+| feat: idempotency routing fingerprint     | enhancement,idempotency | Identity key (path+size+mtime) is implemented; add routing/destination fingerprint for egress guarding.        |
 | feat: service bus ingress bridge          | enhancement,integration | Bridge Service Bus queue/topic -> internal IFileEventQueue with validation + DLQ.                              |
 | feat: service bus egress publisher        | enhancement,integration | Publish file processed notifications with idempotent suppression.                                              |
 | feat: router & sink failure metrics       | telemetry,observability | Emit router.matches, router.fanout.count, sink.write.failures with labels.                                     |

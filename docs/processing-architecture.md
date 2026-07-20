@@ -110,8 +110,8 @@ JSON example
 Yes—`IFileProcessor` is intended to be horizontally scalable.
 
 - Work distribution: Use Redis Streams consumer groups (already present). Multiple pods/containers can process in parallel without duplicate delivery.
-- Exactly‑once semantics: Implement an idempotency key derived from the file identity (protocol + normalized path + size + mtime + routing fingerprint). Store in Redis (SET or HASH) before side‑effects; treat duplicates as no‑ops.
-- ACK discipline: ACK the queue message only after all destination writes succeed and idempotency state is persisted.
+- Duplicate suppression (implemented): the idempotency key is derived from the file identity (`fh:idemp:v2:` + source identity path + size + mtime). The key is checked before processing and persisted only **after** a successful transfer, so a crash or failure mid-transfer results in a retry (at-least-once), never a permanently suppressed file. Routing fingerprint in the key remains future work.
+- ACK discipline (current gap): the Redis Streams queue still ACKs entries on read, before processing. For sources with `DeleteAfterTransfer=false` this is compensated by re-discovery — an unmarked file is re-polled and re-enqueued on the next cycle. ACK-after-write remains planned hardening.
 - Concurrency control: Apply per‑destination limits (e.g., `MaxConcurrentPerDestination`) to avoid overloading slower sinks.
 - Failure isolation: A failure to one destination in a fan‑out either (a) fails the whole event (strict), or (b) records partial success and retries the remaining subset—configurable.
 - Leases/timeouts: Use operation timeouts and safe cancellation; no shared in‑memory state is required between nodes.
@@ -168,7 +168,7 @@ These remain in the roadmap and will be added once multi-destination routing is 
 | 2    | First adapters (Local reader & sink, SFTP reader)                                        | Implemented | Local sink + local & SFTP readers registered                                     |
 | 3    | Simple router (1:1 SourceName -> Destination)                                            | Implemented | `SimpleFileRouter` returns first matching plan                                   |
 | 4    | Orchestrator replaces legacy processor                                                   | Implemented | `FileProcessingOrchestrator` registered as sole `IFileProcessor`; legacy removed |
-| 5    | Idempotency (Redis + in‑memory fallback)                                                 | Implemented | Key = `file:{FileEvent.Id}`; future richer key planned                           |
+| 5    | Idempotency (Redis / file-backed / in‑memory)                                            | Implemented | Identity key (path+size+mtime), indefinite retention, mark-after-success        |
 | 6    | Fan‑out & retries                                                                        | Planned     | Current orchestrator processes first destination only                            |
 | 7    | New sinks (SFTP, Blob, etc.)                                                             | Planned     | Only Local sink implemented; SFTP is reader-only                                 |
 | 8    | Expanded telemetry (router.\*, sink failure metrics)                                     | Planned     | Metrics subset live; additional counters pending fan‑out                         |
@@ -177,7 +177,8 @@ These remain in the roadmap and will be added once multi-destination routing is 
 
 - Single destination per file event (first route plan only).
 - No per-destination retry abstraction yet (errors propagate immediately).
-- Idempotency key is simplistic (event ID); routing/destination fingerprint not yet included.
+- Idempotency key covers file identity (path+size+mtime); routing/destination fingerprint not yet included.
+- Queue ACKs on read (pre-processing); crash recovery relies on re-discovery of unmarked files.
 - No cross-destination fan-out or partial success policy.
 - Only local writes; remote destination sinks are future work.
 
@@ -203,7 +204,7 @@ These remain in the roadmap and will be added once multi-destination routing is 
 | Concern                                     | Implemented? | Reference                                     | Next Step                                  |
 | ------------------------------------------- | ------------ | --------------------------------------------- | ------------------------------------------ |
 | Routing (single destination)                | Yes          | `SimpleFileRouter`                            | Add multi-destination fan-out              |
-| Idempotency (in-memory/Redis)               | Yes          | `IdempotencyOptions`, `RedisIdempotencyStore` | Enhance key with file identity hash        |
+| Idempotency (in-memory/file/Redis)          | Yes          | `FileIdentity`, `IdempotencyOptions`, `FileBackedIdempotencyStore`, `RedisIdempotencyStore` | Add routing fingerprint / content hash     |
 | Telemetry basic metrics                     | Yes          | `TelemetryInstrumentation`                    | Add router & sink failure metrics          |
 | Activity spans (orchestrate/read/write)     | Yes          | Orchestrator & Local sink                     | Introduce higher-level `file.process` span |
 | SFTP reader                                 | Yes          | `SftpFileContentReader`                       | Add SFTP sink implementation               |

@@ -116,6 +116,44 @@ public class RemotePollerTests
     }
 
     [Fact]
+    public async Task PollAsync_ChangedFile_IsReDispatchedAsNewVersion()
+    {
+        var opts = CreateOptions(new FtpSourceOptions { Name = "f1", Host = "h", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
+        var queue = new TestQueue();
+        var mtime = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var versions = new List<FakeRemoteFile[]> {
+            new [] { new FakeRemoteFile("/a.txt", 5, mtime) },   // poll 1: dispatched
+            new [] { new FakeRemoteFile("/a.txt", 9, mtime) },   // poll 2: size changed -> unstable, baseline reset
+            new [] { new FakeRemoteFile("/a.txt", 9, mtime) },   // poll 3: stable again -> must re-dispatch
+        };
+        int call = 0;
+        var poller = new TestRemotePoller(queue, opts, _ => new FakeRemoteClient("h", 21, ProtocolType.Ftp, versions[Math.Min(call++, versions.Count - 1)]));
+
+        await poller.PollAsync(CancellationToken.None);
+        await poller.PollAsync(CancellationToken.None);
+        await poller.PollAsync(CancellationToken.None);
+
+        var events = queue.TryDrain(10);
+        Assert.Equal(2, events.Count); // original version + changed version
+        Assert.All(events, e => Assert.EndsWith("/a.txt", e.Metadata.SourcePath));
+    }
+
+    [Fact]
+    public async Task PollAsync_UnchangedFile_IsNotReDispatched()
+    {
+        var opts = CreateOptions(new FtpSourceOptions { Name = "f1", Host = "h", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
+        var queue = new TestQueue();
+        var file = new FakeRemoteFile("/a.txt", 5, DateTimeOffset.UtcNow.AddMinutes(-10));
+        var poller = new TestRemotePoller(queue, opts, _ => new FakeRemoteClient("h", 21, ProtocolType.Ftp, new[] { file }));
+
+        await poller.PollAsync(CancellationToken.None);
+        await poller.PollAsync(CancellationToken.None);
+        await poller.PollAsync(CancellationToken.None);
+
+        Assert.Single(queue.TryDrain(10));
+    }
+
+    [Fact]
     public async Task PollAsync_ConnectionFailure_TriggersBackoff()
     {
         var opts = CreateOptions(new FtpSourceOptions { Name = "f1", Host = "h", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });

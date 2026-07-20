@@ -121,7 +121,10 @@ public abstract class RemotePollerBase : IFilePoller
 
             var key = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
             _observations.TryGetValue(key, out var prev);
-            var alreadyDispatched = _dispatched.ContainsKey(key);
+            // Only the exact dispatched version counts; a changed size/mtime is a new version to re-dispatch.
+            var alreadyDispatched = _dispatched.TryGetValue(key, out var dispatchedVersion)
+                && dispatchedVersion.Size == file.Size
+                && dispatchedVersion.MTime == file.LastWriteTimeUtc;
 
             // Explain readiness decision
             if (_logger.IsEnabled(LogLevel.Trace))
