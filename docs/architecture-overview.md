@@ -178,15 +178,16 @@ Configuration is centralized via `appsettings*.json` bound to strongly typed opt
 
 ```jsonc
 {
-  "Pipeline": {
-    "Sources": {
-      "Local": [{ "Path": "./_data/inboxA" }]
-    },
-    "Destinations": {
-      "Local": [{ "Name": "OutboxA", "Path": "./_data/outboxA" }]
-    },
-    "Routing": [{ "Pattern": "**/*.txt", "Destination": "OutboxA" }]
-  }
+  "FileSources": {
+    "Sources": [{ "Name": "InboxA", "Path": "./_data/inboxA", "Pattern": "*.txt" }]
+  },
+  "Destinations": {
+    "Local": [{ "Name": "OutboxA", "RootPath": "./_data/outboxA" }]
+  },
+  "Routing": {
+    "Rules": [{ "Name": "local-txt", "Protocol": "local", "PathGlob": "**/*.txt", "Destinations": ["OutboxA"] }]
+  },
+  "Idempotency": { "Enabled": true, "TtlSeconds": 0, "DataDirectory": "./_data/state" }
 }
 ```
 
