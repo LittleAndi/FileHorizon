@@ -242,13 +242,9 @@ services:
     volumes:
       - ./_data/sftp-in:/home/demo/upload
     healthcheck:
-      test:
-        [
-          "CMD",
-          "sh",
-          "-c",
-          "echo 'quit' | sftp -P 22 demo@localhost 2>/dev/null || exit 1",
-        ]
+      # TCP probe; an sftp-client check cannot pass non-interactively
+      # (host key / password prompts) so it would report unhealthy forever
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/22"]
       interval: 15s
       timeout: 5s
       retries: 5
