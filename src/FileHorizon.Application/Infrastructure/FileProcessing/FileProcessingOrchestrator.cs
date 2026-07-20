@@ -206,11 +206,42 @@ public sealed class FileProcessingOrchestrator(
         return Result.Success();
     }
 
+    private async Task<Result> ProcessAzureBlobAsync(FileEvent fileEvent, DestinationPlan plan, Stream stream, CancellationToken ct)
+    {
+        var destination = _destinations.CurrentValue.AzureBlob
+            .FirstOrDefault(x => string.Equals(x.Name, plan.DestinationName, StringComparison.OrdinalIgnoreCase));
+        if (destination is null)
+        {
+            _logger.LogWarning("Unknown Azure Blob destination {Dest}", plan.DestinationName);
+            return Result.Failure(Error.Validation.Invalid($"Unknown destination '{plan.DestinationName}'"));
+        }
+        var targetRef = new FileReference(
+            Scheme: Infrastructure.Processing.AzureBlobFileSink.Scheme,
+            Host: null,
+            Port: null,
+            Path: plan.TargetPath,
+            SourceName: plan.DestinationName);
+        var sink = _sinks.FirstOrDefault(s => string.Equals(s.Name, Infrastructure.Processing.AzureBlobFileSink.SinkName, StringComparison.OrdinalIgnoreCase));
+        if (sink is null)
+        {
+            return Result.Failure(Error.Unspecified("Sink.AzureBlobMissing", "Azure Blob sink not registered"));
+        }
+        var write = await sink.WriteAsync(targetRef, stream, plan.Options, ct).ConfigureAwait(false);
+        if (write.IsFailure)
+        {
+            return write;
+        }
+        await stream.DisposeAsync().ConfigureAwait(false);
+        await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
+        return Result.Success();
+    }
+
     private Task<Result> DispatchDestinationAsync(FileEvent fileEvent, DestinationPlan plan, Stream stream, CancellationToken ct) =>
         plan.Kind switch
         {
             Models.DestinationKind.ServiceBus => ProcessServiceBusAsync(fileEvent, plan, stream, ct),
             Models.DestinationKind.Local => ProcessLocalAsync(fileEvent, plan, stream, ct),
+            Models.DestinationKind.AzureBlob => ProcessAzureBlobAsync(fileEvent, plan, stream, ct),
             Models.DestinationKind.Sftp => Task.FromResult(Result.Failure(Error.Unspecified("Destination.SftpUnsupported", "Sftp destination handling not implemented"))),
             _ => Task.FromResult(Result.Failure(Error.Unspecified("Destination.UnknownKind", $"Unhandled destination kind {plan.Kind}")))
         };

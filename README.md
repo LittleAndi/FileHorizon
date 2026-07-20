@@ -350,6 +350,65 @@ Future enhancements under consideration:
 - Session / scheduled messages.
 - Line/record splitting with transformation stage before publish.
 
+### Destinations: Adding Azure Blob Storage
+
+Destinations also support an Azure Blob Storage variant (`Destinations:AzureBlob`). A blob destination lets routing rules write files to a storage account container with a streaming upload (no full buffering), making it suitable for large files.
+
+Configuration (`Destinations:AzureBlob`):
+
+```json
+{
+  "Destinations": {
+    "AzureBlob": [
+      {
+        "Name": "AnalyticsBlob",
+        "ContainerName": "incoming",
+        "RootPathPrefix": "ingest/2025",
+        "AccessTier": "Hot",
+        "ContentTypeStrategy": "InferFromExtension",
+        "OverwritePolicy": "FailIfExists",
+        "BlobTechnical": {
+          "AccountName": "myaccount"
+        }
+      }
+    ]
+  },
+  "Routing": {
+    "Rules": [
+      {
+        "Name": "CsvToBlob",
+        "Protocol": "local",
+        "PathGlob": "**/*.csv",
+        "Destinations": ["AnalyticsBlob"]
+      }
+    ]
+  }
+}
+```
+
+Options:
+
+- `ContainerName` (required): target blob container (must already exist).
+- `RootPathPrefix` (optional): virtual folder prefix prepended to every blob path.
+- `AccessTier` (optional): `Hot` | `Cool` | `Cold` | `Archive`; applied per upload.
+- `ContentTypeStrategy`: `InferFromExtension` (default; falls back to `application/octet-stream`), `Provided` (requires `ContentType`), or `None`.
+- `OverwritePolicy`: `FailIfExists` (upload is rejected with `Storage.AlreadyExists` when the blob exists) or `Overwrite`. When omitted, the routing rule's `Overwrite` flag applies.
+- `BlobTechnical`: authentication and retry settings. Provide `ConnectionString` for shared-key/Azurite scenarios, or `AccountName` (optionally with `ManagedIdentityClientId`) for managed identity via `DefaultAzureCredential`. `ServiceUri` overrides `AccountName` for sovereign clouds or a custom Azurite endpoint. Transient failures (throttling, timeouts, 5xx) are retried by the Azure SDK per `MaxRetries` / `RetryBaseDelayMs` / `RetryMaxDelayMs`.
+
+Local development against Azurite:
+
+```
+Destinations__AzureBlob__0__Name=AnalyticsBlob
+Destinations__AzureBlob__0__ContainerName=incoming
+Destinations__AzureBlob__0__BlobTechnical__ConnectionString=UseDevelopmentStorage=true
+```
+
+Telemetry:
+
+- Uploads run inside a `sink.write` activity tagged with `sink.name=AzureBlob`, `blob.container`, `blob.path`, `blob.tier` and `blob.account`.
+- Metrics on the shared `FileHorizon` meter: `blob.upload.bytes`, `blob.upload.duration.ms`, `blob.upload.successes` (tagged with `tier`), and `blob.upload.failures` (tagged with `reason`).
+- Failures are translated to domain errors (`Storage.AlreadyExists`, `Storage.ContainerMissing`, `Storage.Authorization`, `Storage.UploadTransient`, `Storage.UploadError`), never raw exceptions.
+
 ---
 
 ## Service Bus Egress (File ➜ Azure Service Bus Queue/Topic)

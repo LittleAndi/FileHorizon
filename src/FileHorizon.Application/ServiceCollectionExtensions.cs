@@ -25,6 +25,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Abstractions.IFileContentReader, Infrastructure.Processing.LocalFileContentReader>();
         services.AddSingleton<Abstractions.IFileContentReader, Infrastructure.Processing.SftpFileContentReader>();
         services.AddSingleton<Abstractions.IFileSink, Infrastructure.Processing.LocalFileSink>();
+        services.AddSingleton<Abstractions.IFileSink, Infrastructure.Processing.AzureBlobFileSink>();
+        // Blob client is inert until an AzureBlob destination is configured; connections are created lazily per destination.
+        services.AddSingleton<Abstractions.IBlobStorageClient, Infrastructure.Storage.AzureBlobStorageClient>();
         services.AddSingleton<Abstractions.IFileRouter, Infrastructure.Processing.SimpleFileRouter>();
         // File type detection: keep raw extension detector + composite for future sniffers
         services.AddSingleton<Infrastructure.Processing.ExtensionFileTypeDetector>();

@@ -7,6 +7,7 @@ public sealed class DestinationsOptions
     public List<LocalDestinationOptions> Local { get; set; } = [];
     public List<SftpDestinationOptions> Sftp { get; set; } = [];
     public List<ServiceBusDestinationOptions> ServiceBus { get; set; } = [];
+    public List<AzureBlobDestinationOptions> AzureBlob { get; set; } = [];
 }
 
 public sealed class LocalDestinationOptions
@@ -69,6 +70,54 @@ public sealed class ServiceBusDestinationOptions
     public bool EnableGzipCompression { get; set; } = false;
     
     public ServiceBusTechnicalOptions ServiceBusTechnical { get; set; } = new(); // destination specific Service Bus settings (retries, tracing, MI namespace)
+}
+
+public sealed class AzureBlobDestinationOptions
+{
+    public string Name { get; set; } = string.Empty; // logical destination name used in routing rules
+    public string ContainerName { get; set; } = string.Empty;
+    /// <summary>Optional virtual folder prefix prepended to every blob path (e.g. "ingest/2025").</summary>
+    public string? RootPathPrefix { get; set; }
+    /// <summary>Optional access tier applied on upload: Hot | Cool | Cold | Archive.</summary>
+    public string? AccessTier { get; set; }
+    /// <summary>How the blob Content-Type is determined. Default infers from the file extension.</summary>
+    public BlobContentTypeStrategy ContentTypeStrategy { get; set; } = BlobContentTypeStrategy.InferFromExtension;
+    /// <summary>Content type applied when ContentTypeStrategy is Provided.</summary>
+    public string? ContentType { get; set; }
+    /// <summary>Overwrite behavior for existing blobs. When omitted, the routing rule's Overwrite flag applies.</summary>
+    public BlobOverwritePolicy? OverwritePolicy { get; set; }
+    public AzureBlobTechnicalOptions BlobTechnical { get; set; } = new(); // destination specific storage settings (auth, retries)
+}
+
+public enum BlobContentTypeStrategy
+{
+    InferFromExtension = 0,
+    Provided = 1,
+    None = 2
+}
+
+public enum BlobOverwritePolicy
+{
+    FailIfExists = 0,
+    Overwrite = 1
+}
+
+public sealed class AzureBlobTechnicalOptions
+{
+    /// <summary>Connection string enabling the destination; if null/empty falls back to managed identity (AccountName or ServiceUri).</summary>
+    public string? ConnectionString { get; set; }
+    /// <summary>Storage account name used to build https://{AccountName}.blob.core.windows.net for managed identity auth.</summary>
+    public string? AccountName { get; set; }
+    /// <summary>Optional full blob service URI (takes precedence over AccountName; useful for Azurite or sovereign clouds).</summary>
+    public string? ServiceUri { get; set; }
+    /// <summary>Optional managed identity client id (user-assigned) if a specific identity should be used for auth.</summary>
+    public string? ManagedIdentityClientId { get; init; }
+    /// <summary>Maximum retry attempts for transient upload failures (Azure SDK retry policy). Set to 0 to disable retries.</summary>
+    public int MaxRetries { get; init; } = 3;
+    /// <summary>Base delay in milliseconds for the first retry attempt.</summary>
+    public int RetryBaseDelayMs { get; init; } = 500;
+    /// <summary>Maximum delay cap in milliseconds for exponential backoff.</summary>
+    public int RetryMaxDelayMs { get; init; } = 8000;
 }
 
 public sealed class ServiceBusTechnicalOptions
