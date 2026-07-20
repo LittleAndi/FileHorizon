@@ -57,7 +57,7 @@ public class AzureBlobFileSinkTests
     private static FileReference Target(string path, string? sourceName = "archive", string scheme = AzureBlobFileSink.Scheme)
         => new(scheme, null, null, path, sourceName);
 
-    private static FileWriteOptions WriteOptions(bool overwrite = false) => new(overwrite, false, null);
+    private static FileWriteOptions WriteOptions(bool overwrite = false) => new(overwrite, false);
 
     private static MemoryStream Content() => new(Encoding.UTF8.GetBytes("hello"));
 

@@ -44,7 +44,7 @@ public interface IFileRouter
 
 public sealed record FileReference(string Scheme, string? Host, int? Port, string Path, string? SourceName);
 public sealed record FileAttributesInfo(long Size, DateTimeOffset LastWriteUtc, string? Hash);
-public sealed record FileWriteOptions(bool Overwrite, bool ComputeHash, string? RenamePattern);
+public sealed record FileWriteOptions(bool Overwrite, bool ComputeHash);
 public sealed record DestinationPlan(string DestinationName, string TargetPath, FileWriteOptions Options);
 ```
 
