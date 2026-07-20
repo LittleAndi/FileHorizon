@@ -71,6 +71,16 @@ public readonly record struct Error(string Code, string Message)
         public static readonly Error NegativeSize = new("Validation.NegativeSize", "File size must be >= 0");
     }
 
+    public static class Storage
+    {
+        public static Error NotConfigured(string destination) => new("Storage.NotConfigured", $"Blob destination '{destination}' is not configured");
+        public static Error AlreadyExists(string path) => new("Storage.AlreadyExists", $"Blob already exists: {path}");
+        public static Error ContainerMissing(string container) => new("Storage.ContainerMissing", $"Blob container not found: {container}");
+        public static Error Authorization(string message) => new("Storage.Authorization", message);
+        public static Error UploadTransient(string message) => new("Storage.UploadTransient", message);
+        public static Error UploadError(string message) => new("Storage.UploadError", message);
+    }
+
     public static class Messaging
     {
         public static readonly Error DestinationEmpty = new("Messaging.DestinationEmpty", "DestinationName must be provided.");

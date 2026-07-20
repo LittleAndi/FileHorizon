@@ -63,6 +63,7 @@ public sealed class SimpleFileRouter(
         if (_destinationsOptions.CurrentValue.Local.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.Local;
         if (_destinationsOptions.CurrentValue.Sftp.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.Sftp;
         if (_destinationsOptions.CurrentValue.ServiceBus.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.ServiceBus;
+        if (_destinationsOptions.CurrentValue.AzureBlob.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.AzureBlob;
         return DestinationKind.Local; // default fallback
     }
 

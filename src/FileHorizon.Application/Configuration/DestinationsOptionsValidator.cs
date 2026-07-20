@@ -12,6 +12,23 @@ public sealed class DestinationsOptionsValidator : IValidateOptions<Destinations
         "Content-Encoding" // Reserved for compression
     };
 
+    private static readonly HashSet<string> ValidAccessTiers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Hot", "Cool", "Cold", "Archive"
+    };
+
+    private static bool IsValidContainerName(string name)
+    {
+        if (name.Length is < 3 or > 63) return false;
+        if (!char.IsAsciiLetterLower(name[0]) && !char.IsAsciiDigit(name[0])) return false;
+        if (!char.IsAsciiLetterLower(name[^1]) && !char.IsAsciiDigit(name[^1])) return false;
+        foreach (var c in name)
+        {
+            if (!char.IsAsciiLetterLower(c) && !char.IsAsciiDigit(c) && c != '-') return false;
+        }
+        return !name.Contains("--");
+    }
+
     public ValidateOptionsResult Validate(string? name, DestinationsOptions options)
     {
         if (options is null) return ValidateOptionsResult.Fail("DestinationsOptions instance is null");
@@ -83,6 +100,46 @@ public sealed class DestinationsOptionsValidator : IValidateOptions<Destinations
                     {
                         errors.Add($"{prefix}: ApplicationProperty keys cannot be null or whitespace.");
                     }
+                }
+            }
+        }
+
+        for (int i = 0; i < options.AzureBlob.Count; i++)
+        {
+            var d = options.AzureBlob[i];
+            var prefix = $"Destinations:AzureBlob[{i}]";
+            if (string.IsNullOrWhiteSpace(d.Name)) errors.Add($"{prefix}: Name must be specified.");
+            else if (!seenNames.Add(d.Name)) errors.Add($"{prefix}: Name '{d.Name}' is duplicated.");
+
+            if (string.IsNullOrWhiteSpace(d.ContainerName)) errors.Add($"{prefix}: ContainerName must be specified.");
+            else if (!IsValidContainerName(d.ContainerName)) errors.Add($"{prefix}: ContainerName '{d.ContainerName}' is invalid (3-63 chars, lowercase letters, digits and hyphens, must start and end with letter or digit).");
+
+            if (!string.IsNullOrWhiteSpace(d.AccessTier) && !ValidAccessTiers.Contains(d.AccessTier))
+                errors.Add($"{prefix}: AccessTier '{d.AccessTier}' is invalid. Valid values: Hot, Cool, Cold, Archive.");
+
+            if (d.ContentTypeStrategy == BlobContentTypeStrategy.Provided && string.IsNullOrWhiteSpace(d.ContentType))
+                errors.Add($"{prefix}: ContentType must be specified when ContentTypeStrategy is Provided.");
+
+            if (d.BlobTechnical is null)
+            {
+                errors.Add($"{prefix}: BlobTechnical must be configured.");
+            }
+            else
+            {
+                var hasConnectionString = !string.IsNullOrWhiteSpace(d.BlobTechnical.ConnectionString);
+                var hasAccount = !string.IsNullOrWhiteSpace(d.BlobTechnical.AccountName);
+                var hasServiceUri = !string.IsNullOrWhiteSpace(d.BlobTechnical.ServiceUri);
+                if (!hasConnectionString && !hasAccount && !hasServiceUri)
+                {
+                    errors.Add($"{prefix}: Either BlobTechnical.ConnectionString, BlobTechnical.AccountName or BlobTechnical.ServiceUri must be specified.");
+                }
+                if (hasServiceUri && !Uri.TryCreate(d.BlobTechnical.ServiceUri, UriKind.Absolute, out _))
+                {
+                    errors.Add($"{prefix}: BlobTechnical.ServiceUri is not a valid absolute URI.");
+                }
+                if (d.BlobTechnical.MaxRetries < 0)
+                {
+                    errors.Add($"{prefix}: BlobTechnical.MaxRetries must be >= 0.");
                 }
             }
         }

@@ -4,7 +4,8 @@ public enum DestinationKind
 {
     Local = 0,
     Sftp = 1,
-    ServiceBus = 2
+    ServiceBus = 2,
+    AzureBlob = 3
 }
 
 public sealed record DestinationPlan(

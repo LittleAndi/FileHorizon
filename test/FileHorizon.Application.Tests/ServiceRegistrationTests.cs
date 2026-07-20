@@ -131,6 +131,16 @@ public class ServiceRegistrationTests
         Assert.IsType<DisabledFileContentPublisher>(publisher);
     }
 
+    [Fact]
+    public void AzureBlobSink_And_BlobStorageClient_Are_Registered()
+    {
+        using var sp = BuildServiceProvider();
+        var sinks = sp.GetServices<IFileSink>();
+        Assert.Contains(sinks, s => s is Infrastructure.Processing.AzureBlobFileSink);
+        var blobClient = sp.GetRequiredService<IBlobStorageClient>();
+        Assert.IsType<Infrastructure.Storage.AzureBlobStorageClient>(blobClient);
+    }
+
     // Legacy processor removed; orchestrator is the only implementation
     private sealed class TestNoopFileContentPublisher : IFileContentPublisher
     {

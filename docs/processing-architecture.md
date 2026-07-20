@@ -170,7 +170,7 @@ These remain in the roadmap and will be added once multi-destination routing is 
 | 4    | Orchestrator replaces legacy processor                                                   | Implemented | `FileProcessingOrchestrator` registered as sole `IFileProcessor`; legacy removed |
 | 5    | Idempotency (Redis / file-backed / in‑memory)                                            | Implemented | Identity key (path+size+mtime), indefinite retention, mark-after-success        |
 | 6    | Fan‑out & retries                                                                        | Planned     | Current orchestrator processes first destination only                            |
-| 7    | New sinks (SFTP, Blob, etc.)                                                             | Planned     | Only Local sink implemented; SFTP is reader-only                                 |
+| 7    | New sinks (SFTP, Blob, etc.)                                                             | Partial     | Local + Azure Blob sinks implemented; SFTP is reader-only                        |
 | 8    | Expanded telemetry (router.\*, sink failure metrics)                                     | Planned     | Metrics subset live; additional counters pending fan‑out                         |
 
 ### Current limitations
@@ -214,7 +214,7 @@ These remain in the roadmap and will be added once multi-destination routing is 
 | Archive / retention                         | No           | N/A                                           | Add post-write archive step                |
 | Service Bus ingress/egress                  | No           | N/A                                           | Implement as async bridges                 |
 | Checksum / integrity                        | No           | N/A                                           | Add optional hash compute & validation     |
-| Sink abstraction for cloud                  | No           | N/A                                           | Implement Blob/S3 sinks                    |
+| Sink abstraction for cloud                  | Partial      | `AzureBlobFileSink` via `IBlobStorageClient`  | Add S3 sink                                |
 | Extended metrics (router.\*, sink.failures) | No           | N/A                                           | Emit after fan-out                         |
 
 ---
