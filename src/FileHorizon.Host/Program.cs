@@ -1,6 +1,8 @@
 using FileHorizon.Application;
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Common.Telemetry;
+using FileHorizon.Host.Telemetry;
+using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -27,6 +29,15 @@ builder.Services.Configure<TelemetryOptions>(builder.Configuration.GetSection(Te
 
 var telemetryOptions = builder.Configuration.GetSection(TelemetryOptions.SectionName).Get<TelemetryOptions>() ?? new TelemetryOptions();
 
+// The telemetry pipelines below are built from this startup snapshot rather than resolved
+// IOptions<TelemetryOptions>, so validate it explicitly to fail fast on bad config
+// regardless of which telemetry features are enabled.
+var telemetryValidation = new TelemetryOptionsValidator().Validate(Options.DefaultName, telemetryOptions);
+if (telemetryValidation.Failed)
+{
+    throw new OptionsValidationException(Options.DefaultName, typeof(TelemetryOptions), telemetryValidation.Failures);
+}
+
 // Configure OpenTelemetry (Tracing, Metrics, Logging)
 var resourceBuilder = ResourceBuilder.CreateDefault()
     .AddService(
@@ -47,6 +58,10 @@ if (telemetryOptions.EnableLogging)
         o.ParseStateValues = true;
         o.IncludeFormattedMessage = true;
         o.SetResourceBuilder(resourceBuilder);
+        if (OtlpExporterConfig.IsEnabled(telemetryOptions))
+        {
+            o.AddOtlpExporter(exp => OtlpExporterConfig.Apply(exp, telemetryOptions, OtlpExporterConfig.LogsPath));
+        }
     });
 }
 
@@ -75,35 +90,27 @@ builder.Services.AddOpenTelemetry()
         {
             metrics.AddPrometheusExporter();
         }
-        if (telemetryOptions.EnableOtlpExporter && telemetryOptions.OtlpEndpoint is not null)
+        if (OtlpExporterConfig.IsEnabled(telemetryOptions))
         {
-            metrics.AddOtlpExporter(opt =>
-            {
-                opt.Endpoint = new Uri(telemetryOptions.OtlpEndpoint);
-                if (!string.IsNullOrWhiteSpace(telemetryOptions.OtlpHeaders))
-                {
-                    opt.Headers = telemetryOptions.OtlpHeaders;
-                }
-            });
+            metrics.AddOtlpExporter(opt => OtlpExporterConfig.Apply(opt, telemetryOptions, OtlpExporterConfig.MetricsPath));
         }
     })
     .WithTracing(tracing =>
     {
         if (!telemetryOptions.EnableTracing) return;
         tracing.SetResourceBuilder(resourceBuilder);
+        // Default to sampling everything; a configured ratio applies a parent-based ratio sampler.
+        // Range validation happens at startup via TelemetryOptionsValidator.
+        if (telemetryOptions.TracesSampleRatio is { } ratio)
+        {
+            tracing.SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(ratio)));
+        }
         tracing.AddAspNetCoreInstrumentation();
         tracing.AddHttpClientInstrumentation();
         tracing.AddSource(TelemetryInstrumentation.ActivitySourceName);
-        if (telemetryOptions.EnableOtlpExporter && telemetryOptions.OtlpEndpoint is not null)
+        if (OtlpExporterConfig.IsEnabled(telemetryOptions))
         {
-            tracing.AddOtlpExporter(opt =>
-            {
-                opt.Endpoint = new Uri(telemetryOptions.OtlpEndpoint);
-                if (!string.IsNullOrWhiteSpace(telemetryOptions.OtlpHeaders))
-                {
-                    opt.Headers = telemetryOptions.OtlpHeaders;
-                }
-            });
+            tracing.AddOtlpExporter(opt => OtlpExporterConfig.Apply(opt, telemetryOptions, OtlpExporterConfig.TracesPath));
         }
     });
 

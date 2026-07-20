@@ -667,9 +667,10 @@ If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus
 | `EnableLogging`         | true                   | Route structured logs through OTEL exporter                    |
 | `EnablePrometheus`      | true                   | Expose `/metrics` endpoint                                     |
 | `EnableOtlpExporter`    | false                  | Enable OTLP exporter for traces/metrics/logs                   |
-| `OtlpEndpoint`          | null                   | OTLP/gRPC or HTTP endpoint (e.g. `http://otel-collector:4317`) |
-| `OtlpHeaders`           | null                   | Additional OTLP headers (key=value;key2=value2)                |
-| `OtlpInsecure`          | false                  | Allow insecure (no TLS) if collector enforces it               |
+| `OtlpEndpoint`          | null                   | OTLP endpoint (e.g. `http://otel-collector:4317` for gRPC)     |
+| `OtlpProtocol`          | Grpc                   | Wire protocol: `Grpc` (port 4317) or `HttpProtobuf` (port 4318)|
+| `OtlpHeaders`           | null                   | Additional OTLP headers, comma separated (key=value,key2=value2) |
+| `TracesSampleRatio`     | null                   | null = sample all; `0..1` = parent-based ratio sampler         |
 | `ServiceName`           | FileHorizon            | Override service.name resource attribute                       |
 | `ServiceVersion`        | Assembly version       | Override service.version                                       |
 | `DeploymentEnvironment` | ASPNETCORE_ENVIRONMENT | Adds `deployment.environment` attribute                        |
@@ -691,11 +692,28 @@ Telemetry__EnableOtlpExporter=true
 Telemetry__OtlpEndpoint=http://otel-collector:4317
 ```
 
-If headers are required (HTTP/Protobuf variant):
+For the HTTP/Protobuf variant (collector listens on 4318), select the protocol and adjust the endpoint:
 
 ```
-Telemetry__OtlpHeaders=api-key=XYZ123
+Telemetry__EnableOtlpExporter=true
+Telemetry__OtlpProtocol=HttpProtobuf
+Telemetry__OtlpEndpoint=http://otel-collector:4318
 ```
+
+If headers are required (e.g. an authenticating gateway), supply them comma separated
+(the OTLP spec format — semicolons are not recognized as separators):
+
+```
+Telemetry__OtlpHeaders=api-key=XYZ123,tenant=abc
+```
+
+All three signals — traces, metrics and logs — are exported to the same endpoint. This
+suits a collector-based topology where the collector fans out to backends (e.g. exporting
+everything to Elasticsearch). Providers are flushed on graceful shutdown by the
+`OpenTelemetry.Extensions.Hosting` integration.
+
+A plaintext (no TLS) `http://` endpoint works out of the box for both protocols — on
+.NET 8 the runtime supports HTTP/2 cleartext (h2c) for gRPC without any opt-in switch.
 
 ### Docker Compose Example (Prometheus + Collector)
 
@@ -722,7 +740,10 @@ The application container only needs relevant environment variables; `/metrics` 
 
 ### Log Export
 
-Currently logs go through the OpenTelemetry logging provider. If an OTLP exporter is enabled they will be forwarded to the collector; otherwise they remain local (console).
+Logs go through the OpenTelemetry logging provider. When the OTLP exporter is enabled
+(`EnableOtlpExporter=true` with an endpoint) log records are exported to the collector over
+OTLP using the same endpoint/protocol/headers as traces and metrics. Without OTLP enabled
+they remain local (console, in Development or when `LOG_CONSOLE_DEV=true`).
 
 ### Tag / Attribute Conventions (Initial)
 
