@@ -1,0 +1,130 @@
+# Sample: SFTP -> Azure Blob (Azurite emulator), no Redis, single-process pipeline.
+#
+# Quick start:
+#   docker compose -f docker-compose.azurite.yml up -d --build
+#   Drop a file into ./_data/sftp-in and watch it land in Azurite:
+#   blob container "ingest" at http://localhost:10000/devstoreaccount1
+#   (browse with Azure Storage Explorer -> attach to local emulator)
+#
+# Idempotency: file-backed marker store (idempotency.jsonl) on the
+# "fh_data" volume - files are copied exactly once even though they
+# stay on the SFTP server, and markers survive container restarts.
+# The Azurite account key below is the well-known public dev key, not a secret.
+
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: filehorizon-azurite
+    command: "azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data --debug /data/debug.log --skipApiVersionCheck"
+    ports:
+      - "10000:10000"
+    volumes:
+      - azurite_data:/data
+    restart: unless-stopped
+
+  # One-shot: create the target container (FileHorizon requires it to exist).
+  azurite-init:
+    image: mcr.microsoft.com/azure-cli:latest
+    depends_on:
+      azurite:
+        condition: service_started
+    environment:
+      - AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+    entrypoint:
+      - sh
+      - -c
+      - |
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+          az storage container create --name ingest && exit 0
+          echo "azurite not ready, retrying..."
+          sleep 2
+        done
+        exit 1
+    restart: "no"
+
+  sftp:
+    image: atmoz/sftp:latest
+    container_name: filehorizon-sftp-blob
+    # Format: user:password:uid:gid:subdir
+    command: "demo:password:1001:100:upload"
+    ports:
+      - "2222:22"
+    volumes:
+      - ./_data/sftp-in:/home/demo/upload
+    healthcheck:
+      # TCP probe; the sftp-client check used in docker-compose.yml always
+      # fails non-interactively (host key / password prompt)
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/22"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  filehorizon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: filehorizon-app
+    environment:
+      - LOG_CONSOLE_DEV=true
+      - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__FileHorizon=Debug
+      # Single process: poll + transfer in one, in-memory queue (no Redis)
+      - Pipeline__Role=All
+      - Redis__Enabled=false
+      - Features__EnableFileTransfer=true
+      - Features__EnableLocalPoller=false
+      - Features__EnableFtpPoller=false
+      - Features__EnableSftpPoller=true
+      # SFTP source - files are NOT deleted; idempotency prevents re-copy
+      - RemoteFileSources__Sftp__0__Name=PartnerSftp
+      - RemoteFileSources__Sftp__0__Host=sftp
+      - RemoteFileSources__Sftp__0__Port=22
+      - RemoteFileSources__Sftp__0__RemotePath=/upload
+      - RemoteFileSources__Sftp__0__Pattern=*.*
+      - RemoteFileSources__Sftp__0__Username=demo
+      - RemoteFileSources__Sftp__0__PasswordSecretRef=SFTP_PASS
+      - RemoteFileSources__Sftp__0__MinStableSeconds=5
+      - RemoteFileSources__Sftp__0__DeleteAfterTransfer=false
+      - RemoteFileSources__Sftp__0__Enabled=true
+      # Dev secret value consumed by InMemorySecretResolver
+      - SFTP_PASS=password
+      # Azure Blob destination (Azurite emulator)
+      - Destinations__AzureBlob__0__Name=IngestBlob
+      - Destinations__AzureBlob__0__ContainerName=ingest
+      - Destinations__AzureBlob__0__RootPathPrefix=partner
+      - Destinations__AzureBlob__0__ContentTypeStrategy=InferFromExtension
+      - Destinations__AzureBlob__0__OverwritePolicy=Overwrite
+      - Destinations__AzureBlob__0__BlobTechnical__ConnectionString=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+      # Routing: everything from SFTP goes to the blob container
+      - Routing__Rules__0__Name=SftpToBlob
+      - Routing__Rules__0__Protocol=sftp
+      - Routing__Rules__0__PathGlob=**/*
+      - Routing__Rules__0__Destinations__0=IngestBlob
+      # Idempotency: durable file-backed store (no Redis), markers kept forever
+      - Idempotency__Enabled=true
+      - Idempotency__TtlSeconds=0
+      - Idempotency__DataDirectory=/app/data
+    ports:
+      - "8080:8080"
+    volumes:
+      - fh_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      sftp:
+        condition: service_healthy
+      azurite-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  azurite_data:
+    driver: local
+  fh_data:
+    driver: local

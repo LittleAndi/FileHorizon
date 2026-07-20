@@ -540,6 +540,12 @@ Traces include an Activity per remote source (`poll.source`) with tags: `protoco
 
 A `docker-compose.yml` is provided to spin up Redis + the FileHorizon app quickly. The file is compatible with `nerdctl compose` in containerd environments (Rancher Desktop, Lima, etc.).
 
+A second sample, `docker-compose.azurite.yml`, runs an SFTP -> Azure Blob pipeline against the [Azurite](https://github.com/Azure/Azurite) emulator: no Redis (in-memory queue, single process), durable file-backed idempotency, and a one-shot init container that creates the blob container. Start it with:
+
+```
+docker compose -f docker-compose.azurite.yml up -d --build
+```
+
 #### If you are on WSL + Rancher Desktop (containerd)
 
 Use `nerdctl compose` (NOT `docker compose`). Example mapping:
