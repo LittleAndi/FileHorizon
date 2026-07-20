@@ -178,15 +178,16 @@ Configuration is centralized via `appsettings*.json` bound to strongly typed opt
 
 ```jsonc
 {
-  "Pipeline": {
-    "Sources": {
-      "Local": [{ "Path": "./_data/inboxA" }]
-    },
-    "Destinations": {
-      "Local": [{ "Name": "OutboxA", "Path": "./_data/outboxA" }]
-    },
-    "Routing": [{ "Pattern": "**/*.txt", "Destination": "OutboxA" }]
-  }
+  "FileSources": {
+    "Sources": [{ "Name": "InboxA", "Path": "./_data/inboxA", "Pattern": "*.txt" }]
+  },
+  "Destinations": {
+    "Local": [{ "Name": "OutboxA", "RootPath": "./_data/outboxA" }]
+  },
+  "Routing": {
+    "Rules": [{ "Name": "local-txt", "Protocol": "local", "PathGlob": "**/*.txt", "Destinations": ["OutboxA"] }]
+  },
+  "Idempotency": { "Enabled": true, "TtlSeconds": 0, "DataDirectory": "./_data/state" }
 }
 ```
 
@@ -201,8 +202,8 @@ flowchart LR
 
 ## 8. Idempotency & Exactly-Once Semantics
 
-Current: A simple key (e.g., source path + maybe timestamp) tracked via `IIdempotencyStore` prevents reprocessing within a window.
-Planned: Composite content signature (protocol + path + size + modified time + optional hash) to reduce edge collisions (see `NEXT_STEPS.md`).
+Current: A composite identity key (`fh:idemp:v2:` + source identity path + size + last-modified time) tracked via `IIdempotencyStore` prevents re-transferring files that remain at the source (e.g., `DeleteAfterTransfer=false`), including across restarts. A modified file (new size/mtime) produces a new key and is transferred as a new version. Retention defaults to indefinite (`TtlSeconds=0`); markers are written only **after** a successful transfer, so failed or crashed transfers are retried rather than suppressed (at-least-once bias). Store backends: Redis, file-backed JSONL (`Idempotency:DataDirectory`), or in-memory (non-durable).
+Planned: Optional content hash and routing/destination fingerprint in the key (see `NEXT_STEPS.md`).
 Rationale: Protects downstream sinks from duplicate side-effects; complements at-least-once delivery of queue.
 
 ## 9. Observability Model
@@ -235,7 +236,7 @@ flowchart LR
 | Local Polling | Yes                       | Enhancements (backoff)           |
 | SFTP Polling  | Yes                       | FTP/Other protocols              |
 | Queue         | Redis & InMem             | Dead-letter, retry policy        |
-| Idempotency   | Basic key store           | Composite signature, TTL mgmt    |
+| Idempotency   | Identity key (path+size+mtime), durable stores | Content hash, routing fingerprint |
 | Routing       | Pattern-based             | Conditional transforms, fan-out  |
 | Telemetry     | Core metrics/spans        | Expanded metrics, log enrichment |
 | Security      | Basic secrets abstraction | External secret provider         |

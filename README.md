@@ -98,28 +98,32 @@ Example `appsettings.json` excerpt:
 ```json
 {
   "RemoteFileSources": {
-    "Sources": [
+    "Ftp": [
       {
         "Name": "UpstreamFtp",
-        "Protocol": "Ftp",
         "Host": "ftp.example.com",
         "Port": 21,
         "RemotePath": "/drop",
-        "UsernameSecret": "secrets:ftp-user",
-        "PasswordSecret": "secrets:ftp-pass",
-        "MinStableSeconds": 5
-      },
+        "Username": "ftpuser",
+        "PasswordSecretRef": "secrets:ftp-pass",
+        "MinStableSeconds": 5,
+        "Enabled": true
+      }
+    ],
+    "Sftp": [
       {
         "Name": "PartnerSftp",
-        "Protocol": "Sftp",
         "Host": "sftp.partner.net",
         "Port": 22,
         "RemotePath": "/inbound",
-        "UsernameSecret": "secrets:sftp-user",
-        "PasswordSecret": "secrets:sftp-pass",
-        "PrivateKeySecret": "secrets:sftp-key",
-        "PrivateKeyPassphraseSecret": "secrets:sftp-key-pass",
-        "MinStableSeconds": 8
+        "Username": "sftpuser",
+        "PasswordSecretRef": "secrets:sftp-pass",
+        "PrivateKeySecretRef": "secrets:sftp-key",
+        "PrivateKeyPassphraseSecretRef": "secrets:sftp-key-pass",
+        "HostKeyFingerprint": "SHA256:...base64...",
+        "StrictHostKey": true,
+        "MinStableSeconds": 8,
+        "Enabled": true
       }
     ]
   }
@@ -129,14 +133,13 @@ Example `appsettings.json` excerpt:
 Environment variable form (first FTP source):
 
 ```
-RemoteFileSources__Sources__0__Name=UpstreamFtp
-RemoteFileSources__Sources__0__Protocol=Ftp
-RemoteFileSources__Sources__0__Host=ftp.example.com
-RemoteFileSources__Sources__0__Port=21
-RemoteFileSources__Sources__0__RemotePath=/drop
-RemoteFileSources__Sources__0__UsernameSecret=secrets:ftp-user
-RemoteFileSources__Sources__0__PasswordSecret=secrets:ftp-pass
-RemoteFileSources__Sources__0__MinStableSeconds=5
+RemoteFileSources__Ftp__0__Name=UpstreamFtp
+RemoteFileSources__Ftp__0__Host=ftp.example.com
+RemoteFileSources__Ftp__0__Port=21
+RemoteFileSources__Ftp__0__RemotePath=/drop
+RemoteFileSources__Ftp__0__Username=ftpuser
+RemoteFileSources__Ftp__0__PasswordSecretRef=secrets:ftp-pass
+RemoteFileSources__Ftp__0__MinStableSeconds=5
 ```
 
 Validation rules enforced at startup:
@@ -148,7 +151,7 @@ Validation rules enforced at startup:
 
 ### Secrets
 
-Secrets are referenced indirectly (`UsernameSecret`, `PasswordSecret`, etc.). The application resolves them through an `ISecretResolver` abstraction. In development a simple in-memory + environment variable resolver is used; production hosts should plug in Azure Key Vault (or alternative) without changing poller code.
+Secrets are referenced indirectly (`PasswordSecretRef`, `PrivateKeySecretRef`, etc.). The application resolves them through an `ISecretResolver` abstraction. In development a simple in-memory + environment variable resolver is used; production hosts should plug in Azure Key Vault (or alternative) without changing poller code.
 
 ### Readiness (Size Stability)
 
@@ -169,7 +172,7 @@ Key pieces:
 - Readers: `local`, `sftp` (FTP reader pending). The orchestrator selects by `FileReference.Protocol`.
 - Router: Matches by protocol and path into a single destination (current implementation is 1:1).
 - Sinks: Currently local filesystem sink; remote sinks can be added later.
-- Idempotency: Prevents duplicate processing (in-memory or Redis-backed store).
+- Idempotency: Prevents duplicate transfers across restarts. Files are tracked by identity (`SourcePath|SizeBytes|LastModifiedUtc`, prefixed `fh:idemp:v2:`), so a modified file counts as a new version and is transferred again. The marker is written only after a successful transfer (a failed or crashed transfer is retried, never permanently suppressed). Store selection: Redis (if `Redis:Enabled`) → file-backed JSONL (if `Idempotency:DataDirectory` is set) → in-memory (non-durable).
 
 ### Source File Deletion (Event-Driven)
 
@@ -211,8 +214,7 @@ Example `appsettings.json` excerpt:
     "Local": [
       {
         "Name": "OutboxA",
-        "BasePath": "/data/outboxA",
-        "Overwrite": true
+        "RootPath": "/data/outboxA"
       }
     ],
     "Sftp": [
@@ -220,29 +222,32 @@ Example `appsettings.json` excerpt:
         "Name": "PartnerX",
         "Host": "sftp.partner.net",
         "Port": 22,
-        "RemotePath": "/outbound",
-        "UsernameSecret": "secrets:sftp-user",
-        "PasswordSecret": "secrets:sftp-pass"
+        "RootPath": "/outbound",
+        "Username": "sftpuser",
+        "PasswordSecretRef": "secrets:sftp-pass",
+        "StrictHostKey": false
       }
     ]
   },
   "Routing": {
     "Rules": [
       {
-        "Match": {
-          "Protocol": "local",
-          "PathPattern": "^/data/inboxA/.+\\.txt$"
-        },
-        "Destination": "OutboxA"
+        "Name": "local-txt",
+        "Protocol": "local",
+        "PathGlob": "**/*.txt",
+        "Destinations": ["OutboxA"],
+        "RenamePattern": "{fileName}",
+        "Overwrite": true
       }
     ]
   },
   "Transfer": {
-    "ChunkSizeBytes": 32768,
-    "Idempotency": {
-      "Enabled": true,
-      "TtlSeconds": 86400
-    }
+    "ChunkSizeBytes": 32768
+  },
+  "Idempotency": {
+    "Enabled": true,
+    "TtlSeconds": 0,
+    "DataDirectory": "/var/lib/filehorizon"
   }
 }
 ```
@@ -251,22 +256,26 @@ Environment variable form (Windows PowerShell examples):
 
 ```
 Destinations__Local__0__Name=OutboxA
-Destinations__Local__0__BasePath=/data/outboxA
-Destinations__Local__0__Overwrite=true
+Destinations__Local__0__RootPath=/data/outboxA
 
-Routing__Rules__0__Match__Protocol=local
-Routing__Rules__0__Match__PathPattern=^/data/inboxA/.+\.txt$
-Routing__Rules__0__Destination=OutboxA
+Routing__Rules__0__Name=local-txt
+Routing__Rules__0__Protocol=local
+Routing__Rules__0__PathGlob=**/*.txt
+Routing__Rules__0__Destinations__0=OutboxA
+Routing__Rules__0__Overwrite=true
 
 Transfer__ChunkSizeBytes=32768
-Transfer__Idempotency__Enabled=true
-Transfer__Idempotency__TtlSeconds=86400
+Idempotency__Enabled=true
+Idempotency__TtlSeconds=0
+Idempotency__DataDirectory=/var/lib/filehorizon
 ```
 
 Notes:
 
 - On Windows, paths are normalized internally; the router matches against a normalized forward-slash path.
-- If Redis is enabled (`Redis__Enabled=true`), the idempotency store uses Redis with TTL; otherwise an in-memory store is used.
+- `Idempotency` is a top-level section (not nested under `Transfer`). `TtlSeconds=0` (the default) keeps processed-file markers forever — required for sources that keep files in place (`DeleteAfterTransfer=false`); a positive value expires markers after that many seconds.
+- Idempotency store selection: Redis when `Redis__Enabled=true`; otherwise a durable file-backed store (`idempotency.jsonl` under `Idempotency__DataDirectory`) when that directory is set; otherwise in-memory (markers do not survive restarts — a warning is logged if idempotency is enabled in this state).
+- The file-backed store grows a small line per transferred file, unbounded under indefinite retention. Deleting the file while the service is stopped resets tracking and causes at most one re-transfer per still-present source file.
 - Current sink support is local filesystem; remote sinks may be added in future.
 
 For a deeper overview see `docs/processing-architecture.md`.
@@ -625,8 +634,7 @@ Recently completed (this branch): FTP & SFTP pollers, feature flags, remote read
 
 Upcoming / still planned:
 
-- Persistent idempotency & deduplication registry (Redis / durable store)
-- Message claiming / retry hardening for Redis Streams
+- Message claiming / retry hardening for Redis Streams (queue still ACKs on read)
 - Service Bus ingress / egress bridge
 - Extended telemetry (error categorization, size histograms)
 - Configurable secret resolver (production Key Vault implementation)

@@ -88,4 +88,43 @@ public class LocalDirectoryPollerTests
             Directory.Delete(tempRoot, true);
         }
     }
+
+    [Fact]
+    public async Task PollAsync_SizeOnlyChange_ReDispatches_UnchangedDoesNot()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "fh-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var filePath = Path.Combine(tempRoot, "sample.txt");
+            var mtime = DateTime.UtcNow.AddSeconds(-30);
+            await File.WriteAllTextAsync(filePath, "v1");
+            File.SetLastWriteTimeUtc(filePath, mtime);
+
+            var sourcesOptions = new FileSourcesOptions
+            {
+                Sources =
+                [
+                    new() { Name = "test", Path = tempRoot, Pattern = "*.txt", Recursive = false, MinStableSeconds = 1 }
+                ]
+            };
+            var queue = new TestQueue();
+            var poller = new LocalDirectoryPoller(queue, NullLogger<LocalDirectoryPoller>.Instance, new OptionsMonitorStub<FileSourcesOptions>(sourcesOptions));
+
+            await poller.PollAsync(CancellationToken.None);
+            await poller.PollAsync(CancellationToken.None); // unchanged: no re-dispatch
+            Assert.Single(queue.TryDrain(10));
+
+            // Size-only change (mtime restored to the same value) must re-dispatch.
+            await File.WriteAllTextAsync(filePath, "v2 longer");
+            File.SetLastWriteTimeUtc(filePath, mtime);
+            await poller.PollAsync(CancellationToken.None);
+
+            Assert.Single(queue.TryDrain(10));
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, true);
+        }
+    }
 }

@@ -56,11 +56,11 @@ Status: Implemented (baseline)
 
 ## Idempotency / Exactly-Once
 
-Status: Implemented (Initial) / Planned (Enhanced)
+Status: Implemented (Identity-based, durable)
 
-- Current: In-memory or Redis-backed (if enabled) key = `file:{FileEvent.Id}`.
-- Planned: richer identity hash (protocol + host + path + size + mtime + routing fingerprint) for cross-instance de-dup and guarding egress notifications.
-- Future: exactly-once semantics across multi-destination fan-out + egress publishes.
+- Current: key = `fh:idemp:v2:` + source identity path + size + mtime; checked before processing, marked only after successful transfer; indefinite retention by default (`TtlSeconds=0`). Stores: Redis, file-backed JSONL (`Idempotency:DataDirectory`), or in-memory fallback.
+- Planned: routing/destination fingerprint in the key to guard egress notifications; optional content hash.
+- Future: exactly-once semantics across multi-destination fan-out + egress publishes; queue ACK-after-write (Redis Streams currently ACKs on read).
 
 ## Validation & Mapping
 
@@ -101,7 +101,7 @@ Status: Implemented (Dockerfile + docker-compose present)
 | Local Sink            | Filesystem write with basic overwrite + rename pattern support.                     |
 | SFTP Reader           | SFTP source reading supported (no SFTP sink yet).                                   |
 | Redis Queue           | Pluggable Redis Streams queue with fallback to in-memory.                           |
-| Idempotency (Phase 1) | In-memory + Redis store keyed by event Id.                                          |
+| Idempotency (Phase 2) | Identity-keyed (path+size+mtime), mark-after-success; Redis/file-backed/in-memory.  |
 | Metrics (Baseline)    | Processing, queue, polling, bytes copied counters + basic histograms.               |
 | Config Model          | Destinations, Routing, Transfer, Remote sources option classes with validation.     |
 | Deletion Support      | Post-transfer deletion for local, SFTP, FTP sources (where credentials resolvable). |
@@ -114,7 +114,7 @@ Status: Implemented (Dockerfile + docker-compose present)
 | Per-destination retries           | Planned | Introduce retry abstraction & options                    |
 | SFTP Sink                         | Planned | Implement write & host key validation                    |
 | Cloud Object Store Sink (Blob/S3) | Planned | Add first cloud sink behind feature flag                 |
-| Enhanced Idempotency Key          | Planned | Derive deterministic hash & migrate store keys           |
+| Enhanced Idempotency Key          | Done    | Identity key implemented; routing fingerprint still open |
 | Service Bus Ingress               | Planned | Bridge queue -> internal events with validation          |
 | Service Bus Egress                | Planned | Publish notifications post-success with idempotent guard |
 | Router Metrics & fan-out counters | Planned | Emit `router.matches`, `router.fanout.count`             |
@@ -139,7 +139,7 @@ Status: Implemented (Dockerfile + docker-compose present)
 ### Immediate Next Increment Ideas (Refreshed)
 
 1. Multi-destination fan-out support (write loop + failure policy decision: all-or-nothing vs partial retry).
-2. Enhanced idempotency key (include identity hash) + migration path.
+2. Idempotency routing/destination fingerprint (identity key itself is done).
 3. Sink failure metric & router.matches counter.
 4. Per-destination retry/backoff configuration.
 5. Service Bus ingress bridge (scaffold + feature flag).

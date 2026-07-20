@@ -17,7 +17,7 @@ public sealed class LocalDirectoryPoller : IFilePoller
     private readonly IFileEventQueue _queue;
     private readonly ILogger<LocalDirectoryPoller> _logger;
     private readonly IOptionsMonitor<FileSourcesOptions> _sourcesOptions;
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _seenFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (long Size, DateTime MTimeUtc)> _seenFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _disabledSources = new(StringComparer.OrdinalIgnoreCase);
 
     public LocalDirectoryPoller(
@@ -111,13 +111,12 @@ public sealed class LocalDirectoryPoller : IFilePoller
         }
 
         var key = ProtocolIdentity.BuildKey(ProtocolType.Local, string.Empty, 0, fi.FullName);
-        var discovered = new DateTimeOffset(lastWrite, TimeSpan.Zero);
-        if (_seenFiles.TryGetValue(key, out var prev) && prev >= discovered)
+        if (_seenFiles.TryGetValue(key, out var prev) && prev.Size == fi.Length && prev.MTimeUtc == lastWrite)
         {
-            return; // already processed this version
+            return; // already dispatched this exact version; any size/mtime change re-dispatches
         }
 
-        _seenFiles[key] = discovered; // snapshot early
+        _seenFiles[key] = (fi.Length, lastWrite); // snapshot early
 
         var metadata = new FileMetadata(
             SourcePath: key,

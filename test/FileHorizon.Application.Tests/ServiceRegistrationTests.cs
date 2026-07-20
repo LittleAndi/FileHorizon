@@ -66,6 +66,49 @@ public class ServiceRegistrationTests
         return services.BuildServiceProvider();
     }
 
+    private static ServiceProvider BuildServiceProviderWithIdempotency(IdempotencyOptions idempotencyOptions)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection().Build());
+        services.AddLogging(b => b.AddDebug().AddConsole());
+        services.AddApplicationServices();
+        services.AddSingleton<IFileContentPublisher, TestNoopFileContentPublisher>();
+        services.AddSingleton<IOptions<PipelineFeaturesOptions>>(Options.Create(new PipelineFeaturesOptions { EnableLocalPoller = true }));
+        services.AddSingleton<IOptions<PollingOptions>>(Options.Create(new PollingOptions()));
+        services.AddSingleton<IOptions<RedisOptions>>(Options.Create(new RedisOptions()));
+        services.AddSingleton<IOptions<FileSourcesOptions>>(Options.Create(new FileSourcesOptions()));
+        services.AddSingleton<IOptions<DestinationsOptions>>(Options.Create(new DestinationsOptions()));
+        services.AddSingleton<IOptions<RoutingOptions>>(Options.Create(new RoutingOptions()));
+        services.AddSingleton<IOptions<TransferOptions>>(Options.Create(new TransferOptions()));
+        services.AddSingleton<IOptions<PipelineOptions>>(Options.Create(new PipelineOptions()));
+        services.AddSingleton<IOptions<IdempotencyOptions>>(Options.Create(idempotencyOptions));
+        return services.BuildServiceProvider();
+    }
+
+    [Fact]
+    public void IdempotencyStore_Should_Be_InMemory_When_Nothing_Configured()
+    {
+        using var sp = BuildServiceProvider();
+        var store = sp.GetRequiredService<IIdempotencyStore>();
+        Assert.IsType<Infrastructure.Idempotency.InMemoryIdempotencyStore>(store);
+    }
+
+    [Fact]
+    public void IdempotencyStore_Should_Be_FileBacked_When_DataDirectory_Set_And_Redis_Disabled()
+    {
+        var dataDir = Path.Combine(Path.GetTempPath(), "fh-idemp-di-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var sp = BuildServiceProviderWithIdempotency(new IdempotencyOptions { Enabled = true, DataDirectory = dataDir });
+            var store = sp.GetRequiredService<IIdempotencyStore>();
+            Assert.IsType<Infrastructure.Idempotency.FileBackedIdempotencyStore>(store);
+        }
+        finally
+        {
+            try { Directory.Delete(dataDir, true); } catch { }
+        }
+    }
+
     [Fact]
     public void IFileProcessor_Should_Be_Orchestrator_By_Default()
     {

@@ -124,19 +124,50 @@ public static class ServiceCollectionExtensions
         services.AddOptions<Configuration.TelemetryOptions>();
         services.AddSingleton<IValidateOptions<Configuration.TelemetryOptions>, Configuration.TelemetryOptionsValidator>();
         services.AddOptions<Configuration.IdempotencyOptions>();
+        services.AddSingleton<IValidateOptions<Configuration.IdempotencyOptions>, Configuration.IdempotencyOptionsValidator>();
         services.AddOptions<Configuration.ContentDetectionOptions>();
 
-        // Idempotency store (choose Redis if enabled)
+        // Idempotency store selection: Redis (if enabled) -> file-backed (if DataDirectory set) -> in-memory.
         services.AddSingleton<Abstractions.IIdempotencyStore>(sp =>
         {
             var redis = sp.GetService<IOptions<RedisOptions>>()?.Value;
+            var idemp = sp.GetService<IOptions<Configuration.IdempotencyOptions>>()?.Value
+                        ?? new Configuration.IdempotencyOptions();
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            var logger = loggerFactory.CreateLogger("IdempotencyStoreRegistration");
             if (redis is { Enabled: true })
             {
-                return new Infrastructure.Idempotency.RedisIdempotencyStore(
-                    loggerFactory.CreateLogger<Infrastructure.Idempotency.RedisIdempotencyStore>(),
-                    sp.GetRequiredService<IOptionsMonitor<RedisOptions>>()
-                );
+                try
+                {
+                    logger.LogInformation("Using RedisIdempotencyStore");
+                    return new Infrastructure.Idempotency.RedisIdempotencyStore(
+                        loggerFactory.CreateLogger<Infrastructure.Idempotency.RedisIdempotencyStore>(),
+                        sp.GetRequiredService<IOptionsMonitor<RedisOptions>>()
+                    );
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to initialize RedisIdempotencyStore; falling back");
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(idemp.DataDirectory))
+            {
+                try
+                {
+                    var path = Path.Combine(idemp.DataDirectory, Infrastructure.Idempotency.FileBackedIdempotencyStore.DefaultFileName);
+                    logger.LogInformation("Using FileBackedIdempotencyStore at {Path}", path);
+                    return new Infrastructure.Idempotency.FileBackedIdempotencyStore(
+                        path,
+                        loggerFactory.CreateLogger<Infrastructure.Idempotency.FileBackedIdempotencyStore>());
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to initialize FileBackedIdempotencyStore; falling back to in-memory");
+                }
+            }
+            if (idemp.Enabled)
+            {
+                logger.LogWarning("Idempotency is enabled but no durable store is configured; processed-file markers will NOT survive restarts");
             }
             return new Infrastructure.Idempotency.InMemoryIdempotencyStore();
         });

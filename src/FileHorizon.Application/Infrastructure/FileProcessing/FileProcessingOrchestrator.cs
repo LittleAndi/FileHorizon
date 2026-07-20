@@ -51,11 +51,17 @@ public sealed class FileProcessingOrchestrator(
         activity?.SetTag("file.protocol", fileEvent.Protocol);
         activity?.SetTag("file.source_path", fileEvent.Metadata.SourcePath);
 
-        // Idempotency check (optional)
-        var idempotencyGate = await EnsureFirstProcessingAsync(fileEvent, ct).ConfigureAwait(false);
-        if (idempotencyGate.IsFailure || !idempotencyGate.Value)
+        // Idempotency check (optional): skip files whose exact version was already transferred.
+        var idemp = _idempotencyOptions.CurrentValue;
+        string? idempotencyKey = null;
+        if (idemp.Enabled)
         {
-            return idempotencyGate.IsFailure ? Result.Failure(idempotencyGate.Error) : Result.Success();
+            idempotencyKey = FileIdentity.BuildIdempotencyKey(fileEvent.Metadata);
+            if (await IsAlreadyProcessedAsync(idempotencyKey, ct).ConfigureAwait(false))
+            {
+                _logger.LogInformation("Skipping already-transferred file {Key}", idempotencyKey);
+                return Result.Success();
+            }
         }
 
         // Route to destinations (currently handle single destination only)
@@ -66,7 +72,7 @@ public sealed class FileProcessingOrchestrator(
         }
         if (planResult.Value is null)
         {
-            return Result.Success(); // nothing to do
+            return Result.Success(); // nothing to do; intentionally not marked so a routing fix transfers it
         }
         var plan = planResult.Value;
 
@@ -79,6 +85,13 @@ public sealed class FileProcessingOrchestrator(
         await using var stream = open.Value!;
 
         var dispatchResult = await DispatchDestinationAsync(fileEvent, plan, stream, ct).ConfigureAwait(false);
+
+        // Mark only after a successful transfer so a crash or failure mid-transfer is retried,
+        // never permanently suppressed (bias: rare duplicate over silent loss).
+        if (dispatchResult.IsSuccess && idempotencyKey is not null)
+        {
+            await MarkProcessedBestEffortAsync(idempotencyKey, idemp, ct).ConfigureAwait(false);
+        }
         return dispatchResult;
     }
 
@@ -245,36 +258,31 @@ public sealed class FileProcessingOrchestrator(
         return Result<DestinationPlan?>.Success(plans[0]);
     }
 
-    /// <summary>
-    /// Applies idempotency guarding. Returns Result.Success(true) when processing should continue,
-    /// Result.Success(false) when the event was already processed (and should be skipped), or a failure result
-    /// if marking the event failed unexpectedly.
-    /// </summary>
-    private async Task<Result<bool>> EnsureFirstProcessingAsync(FileEvent fileEvent, CancellationToken ct)
+    private async Task<bool> IsAlreadyProcessedAsync(string key, CancellationToken ct)
     {
-        var idemp = _idempotencyOptions.CurrentValue;
-        if (!idemp.Enabled)
-        {
-            return Result<bool>.Success(true);
-        }
-
         try
         {
-            var key = $"file:{fileEvent.Id}";
-            var ttl = TimeSpan.FromSeconds(Math.Max(1, idemp.TtlSeconds));
-            var first = await _idempotencyStore.TryMarkProcessedAsync(key, ttl, ct).ConfigureAwait(false);
-            if (!first)
-            {
-                _logger.LogInformation("Skipping already-processed file event {Id}", fileEvent.Id);
-                return Result<bool>.Success(false);
-            }
-            return Result<bool>.Success(true);
+            return await _idempotencyStore.IsProcessedAsync(key, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            // Treat unexpected exception as failure so caller can decide policy (currently propagate failure)
-            _logger.LogError(ex, "Idempotency mark failed for file event {Id}", fileEvent.Id);
-            return Result<bool>.Failure(Error.Unspecified("Idempotency.MarkFailed", ex.Message));
+            // Fail open: a store outage must never permanently suppress a transfer.
+            _logger.LogWarning(ex, "Idempotency check failed for {Key}; proceeding with transfer", key);
+            return false;
+        }
+    }
+
+    private async Task MarkProcessedBestEffortAsync(string key, IdempotencyOptions idemp, CancellationToken ct)
+    {
+        try
+        {
+            TimeSpan? ttl = idemp.TtlSeconds > 0 ? TimeSpan.FromSeconds(idemp.TtlSeconds) : null;
+            await _idempotencyStore.TryMarkProcessedAsync(key, ttl, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // The transfer already succeeded; a failed mark only risks a duplicate, not loss.
+            _logger.LogWarning(ex, "Failed to mark {Key} as processed; the file may be transferred again", key);
         }
     }
 
