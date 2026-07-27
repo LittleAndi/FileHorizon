@@ -280,6 +280,32 @@ Notes:
 
 For a deeper overview see `docs/processing-architecture.md`.
 
+### Adopting a source that already has a backlog
+
+Pointing FileHorizon at a remote source that already holds files means the first two poll cycles enqueue every one of them (a file is never ready on first sighting — see `MinStableSeconds`). For a source holding thousands of files that is a long, unintended bulk transfer.
+
+To adopt such a source without transferring its history, seed the idempotency store first:
+
+```
+FileHorizon.Host.exe --seed-idempotency --source PartnerSftp [--pattern "*.zip"] [--dry-run]
+```
+
+This lists the configured source, writes an idempotency marker for every matching file, and exits without starting the pipeline. Files already present are then suppressed; only files arriving afterwards are transferred. Fetch the historical files by whatever means suits you.
+
+Because it runs inside the normal host, it uses the same `appsettings.json`, secret resolution, host key validation and remote client as the poller, so the keys it writes are the keys the pipeline will look up. Markers are written through `IIdempotencyStore`, so the Redis store works the same way.
+
+- `--source` is required and names an entry under `RemoteFileSources:Sftp` or `RemoteFileSources:Ftp`. The relevant `Features:Enable*Poller` flag must be on.
+- `--pattern` overrides the source's configured `Pattern`, for seeding a subset.
+- `--dry-run` reports the count and a few sample keys without writing anything.
+- Exit codes: `0` success, `1` seeding failed, `2` bad arguments or unusable configuration.
+
+Notes:
+
+- **Stop the service first.** The file-backed store opens `idempotency.jsonl` with `FileShare.Read`, so a running instance blocks the seeder.
+- A durable store is required — seeding refuses to run against the in-memory store, since the markers would vanish when the process exits.
+- Seeding a file that is mid-upload is harmless: the completed file has a different size or mtime, hence a different key, and still transfers.
+- Marker keys have the form `fh:idemp:v2:{identityKey}|{size}|{mtime}`, e.g. `fh:idemp:v2:sftp://host:22/upload/a.zip|1234|2026-07-14T09:13:22.0000000+00:00`. Note the `+00:00` offset rather than `Z`; prefer this command over hand-writing markers, since a mismatched key is skipped with only a warning and the file transfers anyway.
+
 ### Destinations: Adding Azure Service Bus
 
 Destinations now support a Service Bus variant alongside `Local` and `Sftp`. A Service Bus destination allows routing rules to direct a file's full content into a queue or topic after it has been read. The orchestrator identifies the destination kind and invokes the `IFileContentPublisher` abstraction instead of a file sink.
