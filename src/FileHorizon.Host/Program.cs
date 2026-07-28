@@ -4,6 +4,7 @@ using FileHorizon.Application.Common.Telemetry;
 using FileHorizon.Host.Commands;
 using FileHorizon.Host.Telemetry;
 using Microsoft.Extensions.Options;
+using NReco.Logging.File;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -80,6 +81,14 @@ if (builder.Environment.IsDevelopment() ||
         o.UseUtcTimestamp = false;
         o.IncludeScopes = false;
     });
+}
+
+// File logging is opt-in: it activates only when Logging:File:Path is set. Registered after the
+// ClearProviders above so it survives the OTEL-only reset, same as the console provider.
+var fileLogSection = builder.Configuration.GetSection("Logging:File");
+if (!string.IsNullOrWhiteSpace(fileLogSection["Path"]))
+{
+    builder.Logging.AddFile(fileLogSection);
 }
 
 builder.Services.AddOpenTelemetry()
