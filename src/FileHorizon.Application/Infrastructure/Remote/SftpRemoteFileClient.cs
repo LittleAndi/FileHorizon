@@ -20,7 +20,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
     private readonly string? _password;
     private readonly string? _privateKeyPem;
     private readonly string? _privateKeyPassphrase;
-    private readonly string? _hostKeyFingerprint;
+    private readonly IReadOnlyList<string>? _hostKeyFingerprints;
     private readonly bool _strictHostKey;
     private SftpClient? _client;
 
@@ -32,7 +32,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         string? password,
         string? privateKeyPem,
         string? privateKeyPassphrase,
-        string? hostKeyFingerprint = null,
+        IReadOnlyList<string>? hostKeyFingerprints = null,
         bool strictHostKey = false)
     {
         _logger = logger;
@@ -42,7 +42,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         _password = password;
         _privateKeyPem = privateKeyPem;
         _privateKeyPassphrase = privateKeyPassphrase;
-        _hostKeyFingerprint = hostKeyFingerprint;
+        _hostKeyFingerprints = hostKeyFingerprints;
         _strictHostKey = strictHostKey;
     }
 
@@ -90,7 +90,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
             client = new SftpClient(_host, _port, _username, _password ?? string.Empty);
         }
         client.HostKeyReceived += (_, e) =>
-            e.CanTrust = SshHostKeyValidator.Validate(_logger, _host, _port, _hostKeyFingerprint, _strictHostKey, e.HostKeyName, e.HostKey);
+            e.CanTrust = SshHostKeyValidator.Validate(_logger, _host, _port, _hostKeyFingerprints, _strictHostKey, e.HostKeyName, e.HostKey);
         return client;
     }
 

@@ -121,6 +121,7 @@ Example `appsettings.json` excerpt:
         "PrivateKeySecretRef": "secrets:sftp-key",
         "PrivateKeyPassphraseSecretRef": "secrets:sftp-key-pass",
         "HostKeyFingerprint": "SHA256:...base64...",
+        "HostKeyFingerprints": ["SHA256:...ed25519...", "SHA256:...rsa..."],
         "StrictHostKey": true,
         "MinStableSeconds": 8,
         "Enabled": true
@@ -148,6 +149,34 @@ Validation rules enforced at startup:
 - `Port` must be > 0.
 - Appropriate credential secret(s) must be present (username/password or key for SFTP; username/password for FTP).
 - `MinStableSeconds` must be >= 0.
+- Every configured host key fingerprint must be a recognised format (see below).
+- `StrictHostKey: true` requires at least one fingerprint, otherwise every connection would be rejected.
+
+### SFTP Host Key Verification
+
+The server's host key is checked against the fingerprints pinned in configuration. Three formats are accepted:
+
+| Format | Example |
+| ------ | ------- |
+| OpenSSH SHA256 | `SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU` |
+| Bare base64 SHA256 (padded or unpadded) | `47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU` |
+| Legacy MD5 colon hex | `16:27:ac:a5:76:28:2d:36:63:1b:56:4d:eb:df:a6:48` |
+
+Get a server's fingerprint with `ssh-keyscan -t ed25519 sftp.partner.net | ssh-keygen -lf -`.
+
+Use `HostKeyFingerprint` for a single key. Use `HostKeyFingerprints` to pin several — the presented key is trusted when it matches **any** entry. Both properties may be set at once; the union is accepted, and formats can be mixed within a list. Pinning several keys covers two common cases:
+
+- **Multiple host key algorithms.** A server offering both ed25519 and RSA may present either, depending on what gets negotiated. Pinning only one means an algorithm change (server reconfiguration, library upgrade) breaks the connection.
+- **Key rotation.** Pin the old and new keys together for the duration of the cutover, then remove the old one.
+
+Behaviour when a key does not match, or when none is configured, is governed by `StrictHostKey`:
+
+| `StrictHostKey` | No fingerprints configured | Fingerprints configured |
+| --------------- | -------------------------- | ----------------------- |
+| `false` (default) | Connect, log a warning with the presented fingerprint | Connect only on match; reject otherwise |
+| `true` | Reject (and fail startup validation) | Connect only on match; reject otherwise |
+
+A delimited list in the singular `HostKeyFingerprint` property (for example two fingerprints separated by a comma) is **not** supported and is rejected at startup — use `HostKeyFingerprints`.
 
 ### Secrets
 

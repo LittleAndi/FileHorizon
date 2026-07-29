@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 namespace FileHorizon.Application.Infrastructure.Remote;
 
 /// <summary>
-/// Validates SSH server host keys against an operator-configured pinned fingerprint.
+/// Validates SSH server host keys against one or more operator-configured pinned fingerprints.
 /// Supported fingerprint formats: OpenSSH SHA256 ("SHA256:&lt;base64&gt;"), bare base64 SHA256,
 /// and legacy MD5 hex pairs separated by colons ("16:27:ac:...").
 /// </summary>
@@ -12,13 +12,16 @@ public static class SshHostKeyValidator
 {
     /// <summary>
     /// Decide whether the presented host key can be trusted.
-    /// When a fingerprint is configured it must match. When none is configured, the key is
-    /// accepted only if <paramref name="strictHostKey"/> is false (with a warning logged).
+    /// When any fingerprints are configured the presented key must match at least one of them.
+    /// When none are configured, the key is accepted only if <paramref name="strictHostKey"/> is
+    /// false (with a warning logged).
     /// </summary>
-    public static bool Validate(ILogger logger, string host, int port, string? expectedFingerprint, bool strictHostKey, string hostKeyName, byte[] hostKey)
+    public static bool Validate(ILogger logger, string host, int port, IReadOnlyList<string>? expectedFingerprints, bool strictHostKey, string hostKeyName, byte[] hostKey)
     {
         var presented = ToSha256Fingerprint(hostKey);
-        if (string.IsNullOrWhiteSpace(expectedFingerprint))
+        var expected = expectedFingerprints?.Where(f => !string.IsNullOrWhiteSpace(f)).ToArray() ?? [];
+
+        if (expected.Length == 0)
         {
             if (strictHostKey)
             {
@@ -29,13 +32,26 @@ public static class SshHostKeyValidator
             return true;
         }
 
-        if (FingerprintMatches(expectedFingerprint, hostKey))
+        if (AnyFingerprintMatches(expected, hostKey))
         {
-            logger.LogDebug("SSH host key for {Host}:{Port} matched configured fingerprint ({KeyType} {Fingerprint})", host, port, hostKeyName, presented);
+            logger.LogDebug("SSH host key for {Host}:{Port} matched a configured fingerprint ({KeyType} {Fingerprint})", host, port, hostKeyName, presented);
             return true;
         }
 
-        logger.LogError("Rejecting SSH host key for {Host}:{Port}: presented key {KeyType} {Fingerprint} does not match configured HostKeyFingerprint", host, port, hostKeyName, presented);
+        logger.LogError("Rejecting SSH host key for {Host}:{Port}: presented key {KeyType} {Fingerprint} does not match any of the {Count} configured host key fingerprint(s)", host, port, hostKeyName, presented, expected.Length);
+        return false;
+    }
+
+    /// <summary>
+    /// True when the host key matches at least one of the supplied fingerprints.
+    /// </summary>
+    public static bool AnyFingerprintMatches(IEnumerable<string> expectedFingerprints, byte[] hostKey)
+    {
+        foreach (var expected in expectedFingerprints)
+        {
+            if (string.IsNullOrWhiteSpace(expected)) continue;
+            if (FingerprintMatches(expected, hostKey)) return true;
+        }
         return false;
     }
 

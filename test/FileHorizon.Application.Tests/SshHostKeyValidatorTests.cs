@@ -8,9 +8,12 @@ namespace FileHorizon.Application.Tests;
 public sealed class SshHostKeyValidatorTests
 {
     private static readonly byte[] HostKey = Encoding.UTF8.GetBytes("fake-ssh-host-key-material");
+    private static readonly byte[] OtherHostKey = Encoding.UTF8.GetBytes("second-fake-ssh-host-key-material");
 
-    private static string Sha256Base64Unpadded() =>
-        Convert.ToBase64String(SHA256.HashData(HostKey)).TrimEnd('=');
+    private static string Sha256Base64Unpadded(byte[]? key = null) =>
+        Convert.ToBase64String(SHA256.HashData(key ?? HostKey)).TrimEnd('=');
+
+    private static string OpenSshFingerprint(byte[]? key = null) => $"SHA256:{Sha256Base64Unpadded(key)}";
 
     private static string Md5ColonHex()
     {
@@ -21,7 +24,7 @@ public sealed class SshHostKeyValidatorTests
     [Fact]
     public void Matches_openssh_sha256_format()
     {
-        Assert.True(SshHostKeyValidator.FingerprintMatches($"SHA256:{Sha256Base64Unpadded()}", HostKey));
+        Assert.True(SshHostKeyValidator.FingerprintMatches(OpenSshFingerprint(), HostKey));
     }
 
     [Fact]
@@ -46,22 +49,21 @@ public sealed class SshHostKeyValidatorTests
     [Fact]
     public void Rejects_wrong_fingerprint()
     {
-        var other = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes("different-key"))).TrimEnd('=');
-        Assert.False(SshHostKeyValidator.FingerprintMatches($"SHA256:{other}", HostKey));
+        Assert.False(SshHostKeyValidator.FingerprintMatches(OpenSshFingerprint(OtherHostKey), HostKey));
         Assert.False(SshHostKeyValidator.FingerprintMatches("16:27:ac:a5:76:28:2d:36:63:1b:56:4d:eb:df:a6:48", HostKey));
     }
 
     [Fact]
     public void Validate_accepts_matching_fingerprint()
     {
-        var ok = SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, $"SHA256:{Sha256Base64Unpadded()}", strictHostKey: true, "ssh-ed25519", HostKey);
+        var ok = SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, [OpenSshFingerprint()], strictHostKey: true, "ssh-ed25519", HostKey);
         Assert.True(ok);
     }
 
     [Fact]
     public void Validate_rejects_mismatched_fingerprint()
     {
-        var ok = SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", strictHostKey: false, "ssh-ed25519", HostKey);
+        var ok = SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, ["SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"], strictHostKey: false, "ssh-ed25519", HostKey);
         Assert.False(ok);
     }
 
@@ -77,5 +79,50 @@ public sealed class SshHostKeyValidatorTests
     {
         var ok = SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, null, strictHostKey: false, "ssh-ed25519", HostKey);
         Assert.True(ok);
+    }
+
+    [Fact]
+    public void Validate_with_empty_list_behaves_as_unconfigured()
+    {
+        Assert.False(SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, [], strictHostKey: true, "ssh-ed25519", HostKey));
+        Assert.True(SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, [], strictHostKey: false, "ssh-ed25519", HostKey));
+    }
+
+    [Fact]
+    public void Validate_with_only_blank_entries_behaves_as_unconfigured()
+    {
+        // A list of blanks must not be treated as "pinned to nothing" and silently accept everything under strict.
+        Assert.False(SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, ["", "   "], strictHostKey: true, "ssh-ed25519", HostKey));
+    }
+
+    [Fact]
+    public void Validate_accepts_when_any_listed_fingerprint_matches()
+    {
+        string[] pinned = [OpenSshFingerprint(OtherHostKey), OpenSshFingerprint()];
+        Assert.True(SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, pinned, strictHostKey: true, "ssh-ed25519", HostKey));
+
+        // ...and the other key in the list is trusted too — the rotation / multi-algorithm case.
+        Assert.True(SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, pinned, strictHostKey: true, "ssh-rsa", OtherHostKey));
+    }
+
+    [Fact]
+    public void Validate_rejects_when_no_listed_fingerprint_matches()
+    {
+        string[] pinned = [OpenSshFingerprint(OtherHostKey), "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"];
+        Assert.False(SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, pinned, strictHostKey: true, "ssh-ed25519", HostKey));
+    }
+
+    [Fact]
+    public void Validate_accepts_mixed_fingerprint_formats_in_one_list()
+    {
+        string[] pinned = [OpenSshFingerprint(OtherHostKey), Md5ColonHex()];
+        Assert.True(SshHostKeyValidator.Validate(NullLogger.Instance, "host", 22, pinned, strictHostKey: true, "ssh-ed25519", HostKey));
+    }
+
+    [Fact]
+    public void AnyFingerprintMatches_skips_blank_entries()
+    {
+        Assert.True(SshHostKeyValidator.AnyFingerprintMatches(["", "  ", OpenSshFingerprint()], HostKey));
+        Assert.False(SshHostKeyValidator.AnyFingerprintMatches(["", "  "], HostKey));
     }
 }

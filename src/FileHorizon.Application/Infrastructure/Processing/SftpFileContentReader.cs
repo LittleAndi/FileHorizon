@@ -50,7 +50,7 @@ public sealed class SftpFileContentReader : IFileContentReader
             return Result<FileAttributesInfo>.Failure(Error.Validation.Invalid("Invalid SFTP file reference; host/port/path missing"));
         }
         var creds = await ResolveCredentialsAsync(file.SourceName, host, port, ct).ConfigureAwait(false);
-        await using var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase, creds.HostKeyFingerprint, creds.StrictHostKey);
+        await using var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase, creds.HostKeyFingerprints, creds.StrictHostKey);
         try
         {
             await client.ConnectAsync(ct).ConfigureAwait(false);
@@ -76,7 +76,7 @@ public sealed class SftpFileContentReader : IFileContentReader
         }
         var creds = await ResolveCredentialsAsync(file.SourceName, host, port, ct).ConfigureAwait(false);
         // REMOVE await using (must keep client alive for stream lifetime)
-        var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase, creds.HostKeyFingerprint, creds.StrictHostKey);
+        var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase, creds.HostKeyFingerprints, creds.StrictHostKey);
         try
         {
             await client.ConnectAsync(ct).ConfigureAwait(false);
@@ -92,7 +92,7 @@ public sealed class SftpFileContentReader : IFileContentReader
         }
     }
 
-    private async Task<(string Username, string? Password, string? PrivateKeyPem, string? PrivateKeyPassphrase, string? HostKeyFingerprint, bool StrictHostKey)>
+    private async Task<(string Username, string? Password, string? PrivateKeyPem, string? PrivateKeyPassphrase, IReadOnlyList<string>? HostKeyFingerprints, bool StrictHostKey)>
         ResolveCredentialsAsync(string? sourceName, string host, int port, CancellationToken ct)
     {
         // Defaults for backward compatibility in tests or if options not bound
@@ -119,7 +119,7 @@ public sealed class SftpFileContentReader : IFileContentReader
         var privateKeyPem = await _secretResolver.ResolveSecretAsync(sftp.PrivateKeySecretRef, ct).ConfigureAwait(false);
         var privateKeyPass = await _secretResolver.ResolveSecretAsync(sftp.PrivateKeyPassphraseSecretRef, ct).ConfigureAwait(false);
 
-        return (username, password, privateKeyPem, privateKeyPass, sftp.HostKeyFingerprint, sftp.StrictHostKey);
+        return (username, password, privateKeyPem, privateKeyPass, sftp.AllHostKeyFingerprints(), sftp.StrictHostKey);
     }
 
     private static bool TryResolveEndpoint(FileReference file, out string host, out int port, out string path)
