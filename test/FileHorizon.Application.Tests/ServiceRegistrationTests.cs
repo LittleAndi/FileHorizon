@@ -110,6 +110,44 @@ public class ServiceRegistrationTests
     }
 
     [Fact]
+    public void IdempotencyStore_Should_Record_No_Fallback_When_Nothing_Configured()
+    {
+        // Nothing durable was asked for, so there is no failure to report - only the absence of config.
+        using var sp = BuildServiceProvider();
+        Assert.IsType<Infrastructure.Idempotency.InMemoryIdempotencyStore>(sp.GetRequiredService<IIdempotencyStore>());
+        Assert.Null(sp.GetRequiredService<Infrastructure.Idempotency.IdempotencyStoreDiagnostics>().Fallback);
+    }
+
+    [Fact]
+    public void IdempotencyStore_Should_Record_Fallback_Cause_When_FileBacked_Store_Is_Locked()
+    {
+        // Reproduces "the service is still running": the marker file is already held for append with
+        // FileShare.Read, so the store cannot be constructed and the registration falls back silently.
+        var dataDir = Path.Combine(Path.GetTempPath(), "fh-idemp-di-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dataDir);
+        var path = Path.Combine(dataDir, Infrastructure.Idempotency.FileBackedIdempotencyStore.DefaultFileName);
+        try
+        {
+            using (new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read))
+            {
+                using var sp = BuildServiceProviderWithIdempotency(new IdempotencyOptions { Enabled = true, DataDirectory = dataDir });
+
+                Assert.IsType<Infrastructure.Idempotency.InMemoryIdempotencyStore>(sp.GetRequiredService<IIdempotencyStore>());
+
+                var fallback = sp.GetRequiredService<Infrastructure.Idempotency.IdempotencyStoreDiagnostics>().Fallback;
+                Assert.NotNull(fallback);
+                Assert.Contains(path, fallback!.Store);
+                Assert.False(string.IsNullOrWhiteSpace(fallback.Reason));
+                Assert.NotNull(fallback.Hint);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dataDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void IFileProcessor_Should_Be_Orchestrator_By_Default()
     {
         using var sp = BuildServiceProvider();

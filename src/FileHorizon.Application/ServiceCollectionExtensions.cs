@@ -130,6 +130,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<Configuration.IdempotencyOptions>, Configuration.IdempotencyOptionsValidator>();
         services.AddOptions<Configuration.ContentDetectionOptions>();
 
+        // Records why the selection below fell back, so a caller that requires a durable store (the
+        // seeding command) can report the real cause instead of only "nothing durable is configured".
+        services.AddSingleton<Infrastructure.Idempotency.IdempotencyStoreDiagnostics>();
+
         // Idempotency store selection: Redis (if enabled) -> file-backed (if DataDirectory set) -> in-memory.
         services.AddSingleton<Abstractions.IIdempotencyStore>(sp =>
         {
@@ -138,6 +142,7 @@ public static class ServiceCollectionExtensions
                         ?? new Configuration.IdempotencyOptions();
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
             var logger = loggerFactory.CreateLogger("IdempotencyStoreRegistration");
+            var diagnostics = sp.GetRequiredService<Infrastructure.Idempotency.IdempotencyStoreDiagnostics>();
             if (redis is { Enabled: true })
             {
                 try
@@ -151,13 +156,18 @@ public static class ServiceCollectionExtensions
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Failed to initialize RedisIdempotencyStore; falling back");
+                    diagnostics.RecordFallback(
+                        "the Redis idempotency store",
+                        ex,
+                        "Check Redis connectivity and Redis:Configuration, or unset Redis:Enabled to use the file-backed store.");
                 }
             }
             if (!string.IsNullOrWhiteSpace(idemp.DataDirectory))
             {
+                string? path = null;
                 try
                 {
-                    var path = Path.Combine(idemp.DataDirectory, Infrastructure.Idempotency.FileBackedIdempotencyStore.DefaultFileName);
+                    path = Path.Combine(idemp.DataDirectory, Infrastructure.Idempotency.FileBackedIdempotencyStore.DefaultFileName);
                     logger.LogInformation("Using FileBackedIdempotencyStore at {Path}", path);
                     return new Infrastructure.Idempotency.FileBackedIdempotencyStore(
                         path,
@@ -166,11 +176,24 @@ public static class ServiceCollectionExtensions
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Failed to initialize FileBackedIdempotencyStore; falling back to in-memory");
+                    diagnostics.RecordFallback(
+                        $"the file-backed idempotency store at {path ?? idemp.DataDirectory}",
+                        ex,
+                        "If FileHorizon is already running, stop it first: the file-backed store opens the file with FileShare.Read, so a second process cannot append to it.");
                 }
             }
             if (idemp.Enabled)
             {
-                logger.LogWarning("Idempotency is enabled but no durable store is configured; processed-file markers will NOT survive restarts");
+                if (diagnostics.Fallback is { } fallback)
+                {
+                    logger.LogWarning(
+                        "Idempotency is enabled and a durable store is configured ({Store}) but could not be opened; processed-file markers will NOT survive restarts",
+                        fallback.Store);
+                }
+                else
+                {
+                    logger.LogWarning("Idempotency is enabled but no durable store is configured; processed-file markers will NOT survive restarts");
+                }
             }
             return new Infrastructure.Idempotency.InMemoryIdempotencyStore();
         });

@@ -124,7 +124,18 @@ var app = builder.Build();
 if (seedRequested)
 {
     // Maintenance path: seed idempotency markers and exit without starting any background service.
-    var seedExitCode = await SeedIdempotencyCommand.RunAsync(app.Services, args, CancellationToken.None);
+    int seedExitCode;
+    try
+    {
+        seedExitCode = await SeedIdempotencyCommand.RunAsync(app.Services, args, CancellationToken.None);
+    }
+    catch (OptionsValidationException ex)
+    {
+        // Options bound by the command are validated on first resolution. A one-off command should
+        // report unusable configuration as the documented exit 2, not as an unhandled crash.
+        Console.Error.WriteLine($"Configuration is invalid: {string.Join("; ", ex.Failures)}");
+        seedExitCode = 2;
+    }
     await app.DisposeAsync();
     return seedExitCode;
 }
