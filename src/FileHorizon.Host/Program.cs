@@ -1,6 +1,7 @@
 using FileHorizon.Application;
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Common.Telemetry;
+using FileHorizon.Host.Commands;
 using FileHorizon.Host.Telemetry;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
@@ -9,7 +10,10 @@ using OpenTelemetry.Trace;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Exporter.Prometheus;
 
-var builder = WebApplication.CreateBuilder(args);
+// Seeding flags are not configuration keys; keep them away from the command-line config provider,
+// which rejects bare switches. Configuration still comes from appsettings and the environment.
+var seedRequested = SeedIdempotencyCommand.IsRequested(args);
+var builder = WebApplication.CreateBuilder(seedRequested ? [] : args);
 
 builder.Services.AddApplicationServices();
 builder.Services.Configure<PollingOptions>(builder.Configuration.GetSection(PollingOptions.SectionName));
@@ -117,6 +121,25 @@ builder.Services.AddOpenTelemetry()
 
 var app = builder.Build();
 
+if (seedRequested)
+{
+    // Maintenance path: seed idempotency markers and exit without starting any background service.
+    int seedExitCode;
+    try
+    {
+        seedExitCode = await SeedIdempotencyCommand.RunAsync(app.Services, args, CancellationToken.None);
+    }
+    catch (OptionsValidationException ex)
+    {
+        // Options bound by the command are validated on first resolution. A one-off command should
+        // report unusable configuration as the documented exit 2, not as an unhandled crash.
+        Console.Error.WriteLine($"Configuration is invalid: {string.Join("; ", ex.Failures)}");
+        seedExitCode = 2;
+    }
+    await app.DisposeAsync();
+    return seedExitCode;
+}
+
 app.MapHealthChecks("/health");
 
 // Expose Prometheus metrics scraping endpoint if enabled
@@ -126,3 +149,5 @@ if (telemetryOptions.EnableMetrics && telemetryOptions.EnablePrometheus)
 }
 
 app.Run();
+
+return 0;

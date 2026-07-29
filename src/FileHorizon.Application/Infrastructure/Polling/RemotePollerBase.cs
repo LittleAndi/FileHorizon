@@ -19,6 +19,9 @@ public abstract class RemotePollerBase : IFilePoller
     private readonly TimeSpan _baseBackoff = TimeSpan.FromSeconds(5);
     private readonly TimeSpan _maxBackoff = TimeSpan.FromMinutes(5);
 
+    /// <summary>How many generated keys a seeding run reports back for inspection.</summary>
+    private const int SeedSampleKeyCount = 5;
+
     protected RemotePollerBase(IFileEventQueue queue, IOptionsMonitor<RemoteFileSourcesOptions> remoteOptions, ILogger logger)
     {
         _queue = queue;
@@ -209,12 +212,7 @@ public abstract class RemotePollerBase : IFilePoller
 
     private async Task EnqueueEventAsync(IRemoteFileSourceDescriptor source, IRemoteFileClient client, IRemoteFileInfo file, string identityKey, CancellationToken ct)
     {
-        var metadata = new FileMetadata(
-            SourcePath: identityKey,
-            SizeBytes: file.Size,
-            LastModifiedUtc: file.LastWriteTimeUtc.UtcDateTime,
-            HashAlgorithm: "none",
-            Checksum: null);
+        var metadata = BuildMetadata(file, identityKey);
 
         var destination = source.DestinationPath ?? file.FullPath; // will be mapped later by processor
         var ev = new FileEvent(
@@ -234,6 +232,98 @@ public abstract class RemotePollerBase : IFilePoller
             _logger.LogDebug("Enqueued remote file {Key} ({Protocol})", identityKey, client.Protocol);
             Common.Telemetry.TelemetryInstrumentation.FilesDiscovered.Add(1, KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()));
         }
+    }
+
+    /// <summary>
+    /// Builds the metadata identifying one specific version of a remote file. Shared by the dispatch
+    /// path and <see cref="SeedIdempotencyAsync"/> so the two can never produce different identity keys.
+    /// </summary>
+    private static FileMetadata BuildMetadata(IRemoteFileInfo file, string identityKey)
+        => new(
+            SourcePath: identityKey,
+            SizeBytes: file.Size,
+            LastModifiedUtc: file.LastWriteTimeUtc.UtcDateTime,
+            HashAlgorithm: "none",
+            Checksum: null);
+
+    /// <summary>
+    /// Marks every file currently present on the named source as already transferred, without moving any
+    /// data. Used to adopt a source that already holds a backlog: existing files are suppressed and only
+    /// files arriving afterwards are picked up.
+    /// </summary>
+    /// <remarks>
+    /// Markers are written through <see cref="IIdempotencyStore"/> rather than composed by hand, so the
+    /// stored format is whatever the configured store uses. A file that is mid-upload when seeded is
+    /// harmless: the completed file has a different size or mtime and therefore a different key.
+    /// </remarks>
+    public async Task<Result<IdempotencySeedResult>> SeedIdempotencyAsync(
+        IdempotencySeedRequest request,
+        IIdempotencyStore store,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(store);
+
+        var source = GetEnabledSources()
+            .FirstOrDefault(s => string.Equals(s.Name, request.SourceName, StringComparison.OrdinalIgnoreCase));
+        if (source is null)
+        {
+            return Result<IdempotencySeedResult>.Failure(
+                Error.Validation.Invalid($"No enabled source named '{request.SourceName}' is configured for this poller."));
+        }
+
+        var pattern = string.IsNullOrWhiteSpace(request.PatternOverride) ? source.Pattern : request.PatternOverride!;
+        var scanned = 0;
+        var marked = 0;
+        var alreadyMarked = 0;
+        var samples = new List<string>();
+
+        try
+        {
+            await using var client = CreateClient(source);
+            await client.ConnectAsync(ct).ConfigureAwait(false);
+
+            await foreach (var file in client.ListFilesAsync(source.RemotePath, source.Recursive, pattern, ct).ConfigureAwait(false))
+            {
+                if (ct.IsCancellationRequested) break;
+                if (file.IsDirectory) continue;
+
+                var identityKey = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
+                var idempotencyKey = FileIdentity.BuildIdempotencyKey(BuildMetadata(file, identityKey));
+
+                scanned++;
+                if (samples.Count < SeedSampleKeyCount)
+                {
+                    samples.Add(idempotencyKey);
+                }
+
+                if (request.DryRun) continue;
+
+                if (await store.TryMarkProcessedAsync(idempotencyKey, request.Ttl, ct).ConfigureAwait(false))
+                {
+                    marked++;
+                }
+                else
+                {
+                    alreadyMarked++;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Markers written before the failure are durable and correct; report progress with the error
+            // so a partial run can simply be repeated.
+            _logger.LogError(ex, "Idempotency seed for source {Source} failed after scanning {Scanned} file(s)", source.Name, scanned);
+            return Result<IdempotencySeedResult>.Failure(
+                Error.Unspecified("Idempotency.SeedFailed", $"Seeding '{source.Name}' failed after {scanned} file(s): {ex.Message}"));
+        }
+
+        _logger.LogInformation(
+            "Idempotency seed for source {Source} (pattern={Pattern}, dryRun={DryRun}): scanned={Scanned}, marked={Marked}, alreadyMarked={AlreadyMarked}",
+            source.Name, pattern, request.DryRun, scanned, marked, alreadyMarked);
+
+        return Result<IdempotencySeedResult>.Success(
+            new IdempotencySeedResult(source.Name, pattern, scanned, marked, alreadyMarked, samples));
     }
 
     protected abstract List<IRemoteFileSourceDescriptor> GetEnabledSources();
