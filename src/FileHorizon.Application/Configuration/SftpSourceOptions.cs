@@ -21,12 +21,33 @@ public sealed class SftpSourceOptions
     /// bare base64 SHA256, or legacy MD5 colon-separated hex. When set, connections to servers whose
     /// host key does not match are rejected.
     /// </summary>
+    /// <remarks>
+    /// Retained for backwards compatibility and for the common single-key case. To pin several keys
+    /// (for example one per host key algorithm, or an outgoing and incoming key during rotation) use
+    /// <see cref="HostKeyFingerprints"/>. Both properties may be set; the union is accepted.
+    /// </remarks>
     public string? HostKeyFingerprint { get; set; }
     /// <summary>
-    /// If true, require a matching <see cref="HostKeyFingerprint"/> and refuse to connect when none is
-    /// configured. If false (default), an unpinned host key is accepted with a warning logged.
+    /// Additional accepted server host key fingerprints, in the same formats as
+    /// <see cref="HostKeyFingerprint"/>. A presented host key is trusted when it matches any entry.
+    /// </summary>
+    /// <remarks>
+    /// Useful when a server offers multiple host key algorithms (e.g. ed25519 and RSA) and the
+    /// negotiated one may vary, or to trust both the old and the new key across a rotation window.
+    /// </remarks>
+    public IList<string> HostKeyFingerprints { get; set; } = [];
+    /// <summary>
+    /// If true, require a match against the configured fingerprints and refuse to connect when none
+    /// are configured. If false (default), an unpinned host key is accepted with a warning logged.
     /// </summary>
     public bool StrictHostKey { get; set; } = false;
+
+    /// <summary>
+    /// The union of <see cref="HostKeyFingerprint"/> and <see cref="HostKeyFingerprints"/>,
+    /// trimmed and with blank entries removed.
+    /// </summary>
+    public IReadOnlyList<string> AllHostKeyFingerprints() =>
+        HostKeyFingerprintSet.Combine(HostKeyFingerprint, HostKeyFingerprints);
     public string? DestinationPath { get; set; }
     public bool CreateDestinationDirectories { get; set; } = true;
     /// <summary>

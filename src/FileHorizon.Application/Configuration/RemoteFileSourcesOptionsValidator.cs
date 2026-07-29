@@ -105,9 +105,17 @@ public sealed class RemoteFileSourcesOptionsValidator : IValidateOptions<RemoteF
                 {
                     errors.Add($"{prefix}: PrivateKeyPassphraseSecretRef specified but PrivateKeySecretRef is missing.");
                 }
-                if (sftp.StrictHostKey && string.IsNullOrWhiteSpace(sftp.HostKeyFingerprint))
+                var fingerprints = sftp.AllHostKeyFingerprints();
+                if (sftp.StrictHostKey && fingerprints.Count == 0)
                 {
-                    errors.Add($"{prefix}: StrictHostKey is enabled but HostKeyFingerprint is not configured; connections would always be rejected.");
+                    errors.Add($"{prefix}: StrictHostKey is enabled but no HostKeyFingerprint/HostKeyFingerprints are configured; connections would always be rejected.");
+                }
+                foreach (var fingerprint in fingerprints)
+                {
+                    if (!HostKeyFingerprintSet.IsWellFormed(fingerprint))
+                    {
+                        errors.Add($"{prefix}: Host key fingerprint '{fingerprint}' is not a recognised format; expected OpenSSH SHA256 ('SHA256:<base64>'), bare base64 SHA256, or legacy MD5 colon-separated hex.");
+                    }
                 }
             }
         }

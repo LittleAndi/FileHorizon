@@ -58,7 +58,7 @@ public sealed class SftpPoller(IFileEventQueue queue,
             password,
             privateKey,
             passphrase,
-            s.HostKeyFingerprint,
+            s.AllHostKeyFingerprints(),
             s.StrictHostKey);
     }
 

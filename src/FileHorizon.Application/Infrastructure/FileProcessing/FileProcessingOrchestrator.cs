@@ -414,7 +414,7 @@ public sealed class FileProcessingOrchestrator(
                 password,
                 null,
                 null,
-                hostKeyFingerprint: src.HostKeyFingerprint,
+                hostKeyFingerprints: src.AllHostKeyFingerprints(),
                 strictHostKey: src.StrictHostKey
             );
             await client.ConnectAsync(ct).ConfigureAwait(false);
