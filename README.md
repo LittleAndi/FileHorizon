@@ -301,7 +301,7 @@ Because it runs inside the normal host, it uses the same `appsettings.json`, sec
 
 Notes:
 
-- **Stop the service first.** The file-backed store opens `idempotency.jsonl` with `FileShare.Read`, so a running instance blocks the seeder.
+- **Stop the service first.** How this is enforced differs by platform, and only Windows enforces it at all: there, `idempotency.jsonl` is opened with `FileShare.Read` and a running instance blocks the seeder outright. On Linux .NET does not enforce `FileShare` between writers, so both processes open the file happily — and seeding a live instance is ineffective rather than merely untidy, because the store loads markers only at construction. The running instance never sees what the seeder appends and transfers the backlog anyway; the markers only take effect after a restart.
 - A durable store is required — seeding refuses to run against the in-memory store, since the markers would vanish when the process exits. The refusal distinguishes the two ways of ending up there: no durable store configured, or one configured that would not open (a locked file being the usual cause), in which case it prints the underlying error rather than pointing at configuration.
 - Seeding a file that is mid-upload is harmless: the completed file has a different size or mtime, hence a different key, and still transfers.
 - Marker keys have the form `fh:idemp:v2:{identityKey}|{size}|{mtime}`, e.g. `fh:idemp:v2:sftp://host:22/upload/a.zip|1234|2026-07-14T09:13:22.0000000+00:00`. Note the `+00:00` offset rather than `Z`; prefer this command over hand-writing markers, since a mismatched key is skipped with only a warning and the file transfers anyway.

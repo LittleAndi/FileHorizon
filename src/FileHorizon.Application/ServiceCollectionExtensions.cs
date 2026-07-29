@@ -176,10 +176,12 @@ public static class ServiceCollectionExtensions
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Failed to initialize FileBackedIdempotencyStore; falling back to in-memory");
+                    // Deliberately cause-agnostic: a running instance holding the file is the common
+                    // reason on Windows, but on Linux that open succeeds, so the hint must not claim it.
                     diagnostics.RecordFallback(
                         $"the file-backed idempotency store at {path ?? idemp.DataDirectory}",
                         ex,
-                        "If FileHorizon is already running, stop it first: the file-backed store opens the file with FileShare.Read, so a second process cannot append to it.");
+                        "If FileHorizon is already running, stop it first; otherwise check that the path exists and is writable.");
                 }
             }
             if (idemp.Enabled)
