@@ -335,6 +335,29 @@ Notes:
 - Seeding a file that is mid-upload is harmless: the completed file has a different size or mtime, hence a different key, and still transfers.
 - Marker keys have the form `fh:idemp:v2:{identityKey}|{size}|{mtime}`, e.g. `fh:idemp:v2:sftp://host:22/upload/a.zip|1234|2026-07-14T09:13:22.0000000+00:00`. Note the `+00:00` offset rather than `Z`; prefer this command over hand-writing markers, since a mismatched key is skipped with only a warning and the file transfers anyway.
 
+### Moving markers to another idempotency store
+
+Changing store — typically the file-backed store to Redis when a service moves onto Kubernetes — otherwise starts the new deployment with no history and re-downloads every file still present on the source. Copy the old deployment's `idempotency.jsonl` to somewhere the new deployment can read, then import it:
+
+```
+FileHorizon.Host.exe --import-idempotency /path/to/old/idempotency.jsonl [--dry-run]
+```
+
+This reads the file, writes every marker through `IIdempotencyStore` into whichever store the current configuration selects, and exits without starting the pipeline. Marker keys are store-agnostic — `FileIdentity` derives them from the source host, path, size and mtime, with nothing about the machine running FileHorizon — so the keys in the file are the keys the new deployment will look up.
+
+- `--dry-run` parses the file and reports what would happen without writing anything (and does not require a durable store).
+- Exit codes: `0` success, `1` the import failed part-way, `2` bad arguments or unusable configuration.
+- Re-running is safe: markers already present are counted as `already known`, not duplicated.
+
+Notes:
+
+- **Keep the source configuration identical.** The key embeds the SFTP/FTP host as configured, its port and the remote path. Swapping a hostname for its FQDN or IP, or changing `RemotePath`, produces different keys and the imported markers will not match.
+- Retention is per-marker: an entry with no expiry stays permanent, one with an expiry is written with the time it had left, and one that has already expired is dropped rather than resurrected.
+- The report ends in `FAILED` and exit `1` if a marker was neither written nor present afterwards. The stores deliberately fail open, so a Redis outage returns "not marked" rather than throwing; the import verifies each such marker instead of reporting a lost migration as a clean one.
+- Stop the old service before copying its file, so the copy has no torn final line — though a torn line is skipped and counted rather than failing the import.
+- Importing into Redis inherits Redis's durability, which is weaker than a file on disk unless configured: a pod with no persistent volume loses every marker on reschedule, and `maxmemory-policy allkeys-lru` can evict markers that have no TTL (the default `Idempotency:TtlSeconds=0`). Use a persistent volume with AOF enabled and `noeviction`.
+- Alternatively, if the source has been drained, `--seed-idempotency` achieves the same outcome without a file: markers for files no longer on the source can never match again, so only the files still present matter. It also suppresses files the old deployment had not yet transferred, so only do that during a quiet window.
+
 ### Destinations: Adding Azure Service Bus
 
 Destinations now support a Service Bus variant alongside `Local` and `Sftp`. A Service Bus destination allows routing rules to direct a file's full content into a queue or topic after it has been read. The orchestrator identifies the destination kind and invokes the `IFileContentPublisher` abstraction instead of a file sink.

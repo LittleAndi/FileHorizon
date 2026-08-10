@@ -16,19 +16,19 @@ public static class SeedIdempotencyCommand
 {
     public const string FlagName = "--seed-idempotency";
 
-    public static bool IsRequested(string[] args) => HasFlag(args, FlagName);
+    public static bool IsRequested(string[] args) => CommandLineArgs.HasFlag(args, FlagName);
 
     public static async Task<int> RunAsync(IServiceProvider services, string[] args, CancellationToken ct)
     {
-        var sourceName = GetOption(args, "--source");
+        var sourceName = CommandLineArgs.GetOption(args, "--source");
         if (string.IsNullOrWhiteSpace(sourceName))
         {
             Console.Error.WriteLine($"Usage: {FlagName} --source <name> [--pattern <glob>] [--dry-run]");
             return 2;
         }
 
-        var dryRun = HasFlag(args, "--dry-run");
-        var patternOverride = GetOption(args, "--pattern");
+        var dryRun = CommandLineArgs.HasFlag(args, "--dry-run");
+        var patternOverride = CommandLineArgs.GetOption(args, "--pattern");
 
         var remoteSources = services.GetRequiredService<IOptions<RemoteFileSourcesOptions>>().Value;
         var poller = ResolvePoller(services, remoteSources, sourceName, out var resolveError);
@@ -41,7 +41,9 @@ public static class SeedIdempotencyCommand
         var store = services.GetRequiredService<IIdempotencyStore>();
         if (!dryRun && store is InMemoryIdempotencyStore)
         {
-            Console.Error.WriteLine(DescribeUnusableStore(services));
+            Console.Error.WriteLine(IdempotencyStoreRequirement.DescribeUnusable(
+                services,
+                "Seeded markers would be discarded when this process exits, so nothing was written."));
             return 2;
         }
 
@@ -64,27 +66,6 @@ public static class SeedIdempotencyCommand
 
         Report(result.Value!, dryRun);
         return 0;
-    }
-
-    /// <summary>
-    /// Explains why seeding will not run. The store registration lands on the in-memory store for two
-    /// very different reasons - nothing durable configured, or something durable that would not open -
-    /// and only the first is a configuration problem, so pointing at config either way would send an
-    /// operator hunting through appsettings when the real fix is to stop the running service.
-    /// </summary>
-    private static string DescribeUnusableStore(IServiceProvider services)
-    {
-        const string consequence = "Seeded markers would be discarded when this process exits, so nothing was written.";
-
-        var fallback = services.GetRequiredService<IdempotencyStoreDiagnostics>().Fallback;
-        if (fallback is null)
-        {
-            return $"No durable idempotency store is configured. {consequence} " +
-                   "Set Idempotency:DataDirectory (or enable Redis) and try again.";
-        }
-
-        var message = $"Configuration selects {fallback.Store}, but it could not be opened: {fallback.Reason} {consequence}";
-        return fallback.Hint is null ? message : $"{message} {fallback.Hint}";
     }
 
     private static void Report(IdempotencySeedResult seed, bool dryRun)
@@ -146,20 +127,5 @@ public static class SeedIdempotencyCommand
             error = $"Cannot seed '{sourceName}': {ex.Message}. Set {flag}=true and try again.";
             return null;
         }
-    }
-
-    private static bool HasFlag(string[] args, string name)
-        => args.Any(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
-
-    private static string? GetOption(string[] args, string name)
-    {
-        for (var i = 0; i < args.Length - 1; i++)
-        {
-            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
-            {
-                return args[i + 1];
-            }
-        }
-        return null;
     }
 }

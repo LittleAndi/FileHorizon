@@ -10,10 +10,12 @@ using OpenTelemetry.Trace;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Exporter.Prometheus;
 
-// Seeding flags are not configuration keys; keep them away from the command-line config provider,
+// Maintenance flags are not configuration keys; keep them away from the command-line config provider,
 // which rejects bare switches. Configuration still comes from appsettings and the environment.
 var seedRequested = SeedIdempotencyCommand.IsRequested(args);
-var builder = WebApplication.CreateBuilder(seedRequested ? [] : args);
+var importRequested = ImportIdempotencyCommand.IsRequested(args);
+var maintenanceRequested = seedRequested || importRequested;
+var builder = WebApplication.CreateBuilder(maintenanceRequested ? [] : args);
 
 builder.Services.AddApplicationServices();
 builder.Services.Configure<PollingOptions>(builder.Configuration.GetSection(PollingOptions.SectionName));
@@ -121,23 +123,38 @@ builder.Services.AddOpenTelemetry()
 
 var app = builder.Build();
 
-if (seedRequested)
+if (maintenanceRequested)
 {
-    // Maintenance path: seed idempotency markers and exit without starting any background service.
-    int seedExitCode;
+    // Maintenance path: write idempotency markers and exit without starting any background service.
+    int exitCode;
     try
     {
-        seedExitCode = await SeedIdempotencyCommand.RunAsync(app.Services, args, CancellationToken.None);
+        if (seedRequested && importRequested)
+        {
+            // Both write markers for the same source of truth; running them together would make the
+            // reported counts meaningless, and the operator wants one or the other.
+            Console.Error.WriteLine(
+                $"{SeedIdempotencyCommand.FlagName} and {ImportIdempotencyCommand.FlagName} cannot be combined; run one at a time.");
+            exitCode = 2;
+        }
+        else if (seedRequested)
+        {
+            exitCode = await SeedIdempotencyCommand.RunAsync(app.Services, args, CancellationToken.None);
+        }
+        else
+        {
+            exitCode = await ImportIdempotencyCommand.RunAsync(app.Services, args, CancellationToken.None);
+        }
     }
     catch (OptionsValidationException ex)
     {
         // Options bound by the command are validated on first resolution. A one-off command should
         // report unusable configuration as the documented exit 2, not as an unhandled crash.
         Console.Error.WriteLine($"Configuration is invalid: {string.Join("; ", ex.Failures)}");
-        seedExitCode = 2;
+        exitCode = 2;
     }
     await app.DisposeAsync();
-    return seedExitCode;
+    return exitCode;
 }
 
 app.MapHealthChecks("/health");
