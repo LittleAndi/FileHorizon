@@ -6,5 +6,5 @@ namespace FileHorizon.Application.Abstractions;
 public interface IFileSink
 {
     string Name { get; }
-    Task<Result> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct);
+    Task<Result<FileWriteReceipt>> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct);
 }

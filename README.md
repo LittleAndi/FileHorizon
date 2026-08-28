@@ -448,6 +448,7 @@ Options:
 - `AccessTier` (optional): `Hot` | `Cool` | `Cold` | `Archive`; applied per upload.
 - `ContentTypeStrategy`: `InferFromExtension` (default; falls back to `application/octet-stream`), `Provided` (requires `ContentType`), or `None`.
 - `OverwritePolicy`: `FailIfExists` (upload is rejected with `Storage.AlreadyExists` when the blob exists) or `Overwrite`. When omitted, the routing rule's `Overwrite` flag applies.
+- `ClaimCheck` (optional): publish a pointer to the uploaded blob on Service Bus after every successful write. See [Claim-Check](#destinations-claim-check-blob--service-bus-pointer).
 - `BlobTechnical`: authentication and retry settings. Provide `ConnectionString` for shared-key/Azurite scenarios, or `AccountName` (optionally with `ManagedIdentityClientId`) for managed identity via `DefaultAzureCredential`. `ServiceUri` overrides `AccountName` for sovereign clouds or a custom Azurite endpoint. Transient failures (throttling, timeouts, 5xx) are retried by the Azure SDK per `MaxRetries` / `RetryBaseDelayMs` / `RetryMaxDelayMs`.
 
 Local development against Azurite:
@@ -463,6 +464,73 @@ Telemetry:
 - Uploads run inside a `sink.write` activity tagged with `sink.name=AzureBlob`, `blob.container`, `blob.path`, `blob.tier` and `blob.account`.
 - Metrics on the shared `FileHorizon` meter: `blob.upload.bytes`, `blob.upload.duration.ms`, `blob.upload.successes` (tagged with `tier`), and `blob.upload.failures` (tagged with `reason`).
 - Failures are translated to domain errors (`Storage.AlreadyExists`, `Storage.ContainerMissing`, `Storage.Authorization`, `Storage.UploadTransient`, `Storage.UploadError`), never raw exceptions.
+
+### Destinations: Claim-Check (blob + Service Bus pointer)
+
+A blob destination can notify Service Bus once the upload succeeds, sending a pointer to the blob instead of the file bytes. This is the claim-check pattern: the file goes to storage, the message carries only its address, and a consumer that recognises the envelope fetches the blob itself. It keeps arbitrarily large files off a Service Bus namespace whose message ceiling is 256 KB total on Standard.
+
+Add a `ClaimCheck` block naming an existing `Destinations:ServiceBus` entry:
+
+```json
+{
+  "Destinations": {
+    "AzureBlob": [
+      {
+        "Name": "DespatchAdviceInbox",
+        "ContainerName": "inbox",
+        "RootPathPrefix": "despatchadvice",
+        "OverwritePolicy": "Overwrite",
+        "ClaimCheck": {
+          "ServiceBusDestination": "DespatchAdviceQueue"
+        },
+        "BlobTechnical": {
+          "ConnectionString": "..."
+        }
+      }
+    ],
+    "ServiceBus": [
+      {
+        "Name": "DespatchAdviceQueue",
+        "EntityName": "despatchadvice-sbq",
+        "ServiceBusTechnical": {
+          "ConnectionString": "..."
+        }
+      }
+    ]
+  },
+  "Routing": {
+    "Rules": [
+      {
+        "Name": "DespatchAdviceToInbox",
+        "Protocol": "sftp",
+        "PathGlob": "**/*.edi",
+        "Destinations": ["DespatchAdviceInbox"]
+      }
+    ]
+  }
+}
+```
+
+Routing rules still name the blob destination. The Service Bus destination is referenced only by the `ClaimCheck` block, so it does not need a rule of its own.
+
+**The message.** The body is the envelope, and only the envelope:
+
+```json
+{ "blobUrl": "https://acct.blob.core.windows.net/inbox/despatchadvice/order.edi", "contentType": "application/edifact", "length": 51234 }
+```
+
+- `contentType` is the blob's content type, resolved by the blob destination's `ContentTypeStrategy`. The Service Bus message advertises that same content type rather than `application/json`, so a consumer that resolves the pointer ends up with exactly what an inline message would have carried.
+- The application property `claimCheck` is set to `"true"`. That marker, not the body's shape, is how a consumer tells a pointer from a payload; `claimCheck` is reserved and cannot be set through `ApplicationProperties`.
+- `fh.fileId` and `fh.protocol` are set as on any published message, and any `ApplicationProperties` configured on the Service Bus destination are applied. Keep setting the properties your subscriptions filter on — a claim-checked message that drops them matches no `CorrelationFilter` rule and disappears without an error.
+- A consumer that does not recognise the envelope must fail loudly rather than forward a pointer as if it were a payload.
+
+**No size threshold.** If `ClaimCheck` is configured, every file routed to that destination is claim-checked, whatever its size. A producer and a consumer never have to agree on where a cutoff sits.
+
+**Ordering and failure.** The blob write happens first and the publish only runs if it succeeded, so a pointer never names bytes that are not in the container. A failed publish fails the whole transfer: the file is not marked as processed and will be retried. The blob from the failed attempt stays behind, so **prefer `OverwritePolicy: Overwrite` on a claim-check destination** — with `FailIfExists`, the retry fails permanently on `Storage.AlreadyExists` and the file never gets through.
+
+Validation rejects a `ClaimCheck` that names a Service Bus destination which does not exist, or one with `EnableGzipCompression` enabled (gzipping a ~100-byte pointer only forces consumers to decompress before they can read a URL).
+
+Telemetry: the publish runs inside a `claimcheck.publish` activity tagged with `messaging.destination`, `blob.destination`, `blob.uri` and `messaging.content_type`, and increments the same `servicebus.publish.*` metrics as an inline publish.
 
 ---
 
