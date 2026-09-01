@@ -35,7 +35,8 @@ public class AzureBlobDestinationValidatorTests
 
     private static DestinationsOptions ClaimCheckOptions(
         string target = "sb-dest",
-        Action<ServiceBusDestinationOptions>? configureServiceBus = null)
+        Action<ServiceBusDestinationOptions>? configureServiceBus = null,
+        Action<AzureBlobDestinationOptions>? configureBlob = null)
     {
         var sb = new ServiceBusDestinationOptions
         {
@@ -44,7 +45,12 @@ public class AzureBlobDestinationValidatorTests
             ServiceBusTechnical = new ServiceBusTechnicalOptions { ConnectionString = "Endpoint=sb://fake/" }
         };
         configureServiceBus?.Invoke(sb);
-        var options = Options(d => d.ClaimCheck = new BlobClaimCheckOptions { ServiceBusDestination = target });
+        var options = Options(d =>
+        {
+            d.ClaimCheck = new BlobClaimCheckOptions { ServiceBusDestination = target };
+            d.OverwritePolicy = BlobOverwritePolicy.Overwrite;
+            configureBlob?.Invoke(d);
+        });
         options.ServiceBus = [sb];
         return options;
     }
@@ -78,6 +84,22 @@ public class AzureBlobDestinationValidatorTests
         var result = _validator.Validate(null, ClaimCheckOptions(configureServiceBus: d => d.EnableGzipCompression = true));
         Assert.False(result.Succeeded);
         Assert.Contains("EnableGzipCompression", result.FailureMessage);
+    }
+
+    [Fact]
+    public void Validate_ClaimCheck_WithDefaultOverwritePolicy_Fails()
+    {
+        var result = _validator.Validate(null, ClaimCheckOptions(configureBlob: d => d.OverwritePolicy = null));
+        Assert.False(result.Succeeded);
+        Assert.Contains("ClaimCheck requires OverwritePolicy: Overwrite", result.FailureMessage);
+    }
+
+    [Fact]
+    public void Validate_ClaimCheck_WithFailIfExistsOverwritePolicy_Fails()
+    {
+        var result = _validator.Validate(null, ClaimCheckOptions(configureBlob: d => d.OverwritePolicy = BlobOverwritePolicy.FailIfExists));
+        Assert.False(result.Succeeded);
+        Assert.Contains("ClaimCheck requires OverwritePolicy: Overwrite", result.FailureMessage);
     }
 
     [Fact]

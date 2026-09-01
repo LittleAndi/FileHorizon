@@ -104,8 +104,9 @@ public sealed class AzureBlobDestinationOptions
 ///
 /// The blob write is ordered before the publish and a failed publish fails the whole transfer, so a pointer
 /// is never sent for bytes that are not in the container. The reverse is possible: the blob lands and the
-/// publish fails, leaving an orphan blob and a file that will be retried. See the README for why that
-/// argues for OverwritePolicy: Overwrite on a claim-check destination.
+/// publish fails, leaving an orphan blob and a file that will be retried. So the validator requires
+/// OverwritePolicy: Overwrite on a claim-check destination -- under FailIfExists the retry would wedge
+/// permanently on the leftover blob.
 /// </remarks>
 public sealed class BlobClaimCheckOptions
 {

@@ -145,6 +145,14 @@ public sealed class DestinationsOptionsValidator : IValidateOptions<Destinations
                         errors.Add($"{prefix}: ClaimCheck.ServiceBusDestination '{target}' has EnableGzipCompression enabled, which is not supported for claim-check pointers.");
                     }
                 }
+
+                // A failed publish fails the transfer with the blob already written, so the file is retried.
+                // Under FailIfExists (the default) every retry then dies permanently on the leftover blob and
+                // no pointer is ever sent. Claim-check requires an idempotent write.
+                if (d.OverwritePolicy != BlobOverwritePolicy.Overwrite)
+                {
+                    errors.Add($"{prefix}: ClaimCheck requires OverwritePolicy: Overwrite so a retried transfer can re-upload the blob; FailIfExists would wedge the file on every retry.");
+                }
             }
 
             if (d.BlobTechnical is null)

@@ -254,6 +254,46 @@ public class BlobClaimCheckTests
     }
 
     [Fact]
+    public async Task ClaimCheck_ReferencingUnknownServiceBusDestination_Fails_Before_Writing_The_Blob()
+    {
+        // The Service Bus target is resolved before the upload. If a config reload has dropped it, the
+        // transfer must fail with nothing written rather than leave an orphan blob no pointer names.
+        var publisher = CapturingPublisher(out var requests);
+        var (orchestrator, sink) = BuildOrchestrator(
+            new DestinationsOptions
+            {
+                AzureBlob = [BlobDestination("gone-from-config")],
+                ServiceBus = [ServiceBusDestination()]
+            },
+            publisher);
+
+        var result = await orchestrator.ProcessAsync(Event(), CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal(0, sink.WriteCount);
+        Assert.Empty(requests);
+    }
+
+    [Fact]
+    public async Task ClaimCheck_Envelope_Omits_ContentType_When_Sink_Reports_None()
+    {
+        var publisher = CapturingPublisher(out var requests);
+        var (orchestrator, _) = BuildOrchestrator(
+            new DestinationsOptions
+            {
+                AzureBlob = [BlobDestination("despatchadvice-queue")],
+                ServiceBus = [ServiceBusDestination()]
+            },
+            publisher,
+            new FileWriteReceipt(5, new Uri(BlobUri), ContentType: null));
+
+        await orchestrator.ProcessAsync(Event(), CancellationToken.None);
+
+        var envelope = JsonSerializer.Deserialize<JsonElement>(Assert.Single(requests).Content.Span);
+        Assert.False(envelope.TryGetProperty("contentType", out _));
+    }
+
+    [Fact]
     public async Task ClaimCheck_Fails_When_Sink_Reports_No_Blob_Location()
     {
         var publisher = CapturingPublisher(out var requests);
@@ -279,5 +319,14 @@ public class BlobClaimCheckTests
             new ClaimCheckEnvelope("https://a/b/c.edi", "application/edifact", 4096).ToUtf8Json());
 
         Assert.Equal("{\"blobUrl\":\"https://a/b/c.edi\",\"contentType\":\"application/edifact\",\"length\":4096}", json);
+    }
+
+    [Fact]
+    public void Envelope_Omits_ContentType_When_Null()
+    {
+        var json = System.Text.Encoding.UTF8.GetString(
+            new ClaimCheckEnvelope("https://a/b/c.edi", null, 4096).ToUtf8Json());
+
+        Assert.Equal("{\"blobUrl\":\"https://a/b/c.edi\",\"length\":4096}", json);
     }
 }

@@ -211,6 +211,24 @@ public sealed class FileProcessingOrchestrator(
         {
             return Result.Failure(Error.Unspecified("Sink.AzureBlobMissing", "Azure Blob sink not registered"));
         }
+
+        // Resolve the claim-check target before the blob write. Resolving it afterwards leaves a window where a
+        // config hot-reload can drop the Service Bus entry between the two reads, failing the publish
+        // non-transiently with a blob already on disk. Failing here means nothing has been written yet.
+        ServiceBusDestinationOptions? claimCheckTarget = null;
+        if (destination.ClaimCheck is { } preCheck)
+        {
+            claimCheckTarget = _destinations.CurrentValue.ServiceBus
+                .FirstOrDefault(x => string.Equals(x.Name, preCheck.ServiceBusDestination, StringComparison.OrdinalIgnoreCase));
+            if (claimCheckTarget is null)
+            {
+                _logger.LogWarning("Claim-check on blob destination {Dest} references unknown Service Bus destination {Target}",
+                    destination.Name, preCheck.ServiceBusDestination);
+                return Result.Failure(Error.Validation.Invalid(
+                    $"Claim-check on blob destination '{destination.Name}' references unknown Service Bus destination '{preCheck.ServiceBusDestination}'"));
+            }
+        }
+
         var write = await sink.WriteAsync(targetRef, stream, plan.Options, ct).ConfigureAwait(false);
         if (write.IsFailure)
         {
@@ -221,7 +239,7 @@ public sealed class FileProcessingOrchestrator(
         // not in the container yet.
         if (destination.ClaimCheck is { } claimCheck)
         {
-            var publish = await PublishClaimCheckAsync(fileEvent, destination, claimCheck, write.Value!, ct).ConfigureAwait(false);
+            var publish = await PublishClaimCheckAsync(fileEvent, destination, claimCheck, claimCheckTarget!, write.Value!, ct).ConfigureAwait(false);
             if (publish.IsFailure)
             {
                 // Fail the whole transfer. The blob is written but nothing downstream knows about it, and
@@ -244,6 +262,7 @@ public sealed class FileProcessingOrchestrator(
         FileEvent fileEvent,
         AzureBlobDestinationOptions blobDestination,
         BlobClaimCheckOptions claimCheck,
+        ServiceBusDestinationOptions serviceBusDestination,
         FileWriteReceipt receipt,
         CancellationToken ct)
     {
@@ -258,21 +277,14 @@ public sealed class FileProcessingOrchestrator(
             return Result.Failure(Error.Messaging.PublishError(
                 $"Blob destination '{blobDestination.Name}' is claim-checked but the sink reported no blob location"));
         }
-        activity?.SetTag("blob.uri", receipt.Location.ToString());
-
-        var serviceBusDestination = _destinations.CurrentValue.ServiceBus
-            .FirstOrDefault(x => string.Equals(x.Name, claimCheck.ServiceBusDestination, StringComparison.OrdinalIgnoreCase));
-        if (serviceBusDestination is null)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, "Validation.Invalid");
-            return Result.Failure(Error.Validation.Invalid(
-                $"Claim-check on blob destination '{blobDestination.Name}' references unknown Service Bus destination '{claimCheck.ServiceBusDestination}'"));
-        }
+        // AbsoluteUri, not ToString(): the latter is the unescaped display form, so a blob whose name has a
+        // space or non-ASCII character would produce a string a strict URL parser rejects.
+        activity?.SetTag("blob.uri", receipt.Location.AbsoluteUri);
 
         // The content type describes what a consumer gets back when it fetches the blob, not the JSON it is
         // reading right now -- that is what lets a consumer treat a resolved pointer and an inline message
         // identically. It comes from the sink so the blob and the envelope can never disagree.
-        var envelope = new ClaimCheckEnvelope(receipt.Location.ToString(), receipt.ContentType, receipt.BytesWritten);
+        var envelope = new ClaimCheckEnvelope(receipt.Location.AbsoluteUri, receipt.ContentType, receipt.BytesWritten);
         activity?.SetTag("messaging.content_type", receipt.ContentType);
 
         var applicationProperties = BuildApplicationProperties(serviceBusDestination, fileEvent);
