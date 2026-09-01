@@ -941,6 +941,37 @@ Logs go through the OpenTelemetry logging provider. When the OTLP exporter is en
 OTLP using the same endpoint/protocol/headers as traces and metrics. Without OTLP enabled
 they remain local (console, in Development or when `LOG_CONSOLE_DEV=true`).
 
+#### File logging
+
+A rolling file provider (`NReco.Logging.File`) is available alongside the console and OTLP
+providers. It is opt-in: nothing is written unless `Logging:File:Path` is configured.
+
+```json
+"Logging": {
+  "LogLevel": { "Default": "Information", "FileHorizon": "Debug" },
+  "File": {
+    "Path": "_data/logs/filehorizon.log",
+    "Append": true,
+    "FileSizeLimitBytes": 10485760,
+    "MaxRollingFiles": 10,
+    "MinLevel": "Debug"
+  }
+}
+```
+
+| Key                  | Default | Description                                                        |
+| -------------------- | ------- | ------------------------------------------------------------------ |
+| `Path`               | (unset) | Log file path; **file logging stays off while this is empty**       |
+| `Append`             | true    | Append to an existing file instead of truncating on start          |
+| `FileSizeLimitBytes` | 0 (off) | Roll to a new file once this size is exceeded                      |
+| `MaxRollingFiles`    | 0 (all) | Number of rolled files to keep (`filehorizon1.log`, `…2.log`, …)   |
+| `MinLevel`           | (unset) | Minimum level for this provider only                               |
+
+Relative paths resolve against the process working directory. In containers, point `Path` at a
+mounted volume (e.g. `/data/logs/filehorizon.log`) so logs outlive the container. Level filters
+under `Logging:LogLevel` apply to every provider; `Logging:File:LogLevel` narrows the file
+provider alone.
+
 ### Tag / Attribute Conventions (Initial)
 
 | Span                    | Key                             | Example                   |
