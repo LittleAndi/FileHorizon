@@ -17,7 +17,7 @@
     <PackageReference Include="Azure.Storage.Blobs" Version="12.29.1" />
     <PackageReference Include="FluentFTP" Version="54.2.0" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.9" />
-    <PackageReference Include="SSH.NET" Version="2025.1.0" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="StackExchange.Redis" Version="2.13.17" />
   </ItemGroup>
 

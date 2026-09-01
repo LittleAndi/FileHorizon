@@ -34,7 +34,7 @@ public interface IFileContentReader // source adapter
 public interface IFileSink // destination adapter
 {
     string Name { get; }
-    Task<Result> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct);
+    Task<Result<FileWriteReceipt>> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct);
 }
 
 public interface IFileRouter

@@ -9,7 +9,8 @@ public sealed class DestinationsOptionsValidator : IValidateOptions<Destinations
     {
         "fh.fileId",
         "fh.protocol",
-        "Content-Encoding" // Reserved for compression
+        "Content-Encoding", // Reserved for compression
+        "claimCheck" // Reserved: marks a message body as a claim-check pointer
     };
 
     private static readonly HashSet<string> ValidAccessTiers = new(StringComparer.OrdinalIgnoreCase)
@@ -35,6 +36,9 @@ public sealed class DestinationsOptionsValidator : IValidateOptions<Destinations
 
         var errors = new List<string>();
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var serviceBusNames = new HashSet<string>(
+            options.ServiceBus.Where(d => !string.IsNullOrWhiteSpace(d.Name)).Select(d => d.Name),
+            StringComparer.OrdinalIgnoreCase);
 
         for (int i = 0; i < options.Local.Count; i++)
         {
@@ -119,6 +123,37 @@ public sealed class DestinationsOptionsValidator : IValidateOptions<Destinations
 
             if (d.ContentTypeStrategy == BlobContentTypeStrategy.Provided && string.IsNullOrWhiteSpace(d.ContentType))
                 errors.Add($"{prefix}: ContentType must be specified when ContentTypeStrategy is Provided.");
+
+            if (d.ClaimCheck is not null)
+            {
+                var target = d.ClaimCheck.ServiceBusDestination;
+                if (string.IsNullOrWhiteSpace(target))
+                {
+                    errors.Add($"{prefix}: ClaimCheck.ServiceBusDestination must be specified.");
+                }
+                else if (!serviceBusNames.Contains(target))
+                {
+                    errors.Add($"{prefix}: ClaimCheck.ServiceBusDestination '{target}' does not match any Destinations:ServiceBus entry.");
+                }
+                else
+                {
+                    // Gzipping a claim-check body would compress a ~100-byte JSON pointer and force every
+                    // consumer to decompress before it can read a URL. Reject it rather than ship it.
+                    var sb = options.ServiceBus.First(x => string.Equals(x.Name, target, StringComparison.OrdinalIgnoreCase));
+                    if (sb.EnableGzipCompression)
+                    {
+                        errors.Add($"{prefix}: ClaimCheck.ServiceBusDestination '{target}' has EnableGzipCompression enabled, which is not supported for claim-check pointers.");
+                    }
+                }
+
+                // A failed publish fails the transfer with the blob already written, so the file is retried.
+                // Under FailIfExists (the default) every retry then dies permanently on the leftover blob and
+                // no pointer is ever sent. Claim-check requires an idempotent write.
+                if (d.OverwritePolicy != BlobOverwritePolicy.Overwrite)
+                {
+                    errors.Add($"{prefix}: ClaimCheck requires OverwritePolicy: Overwrite so a retried transfer can re-upload the blob; FailIfExists would wedge the file on every retry.");
+                }
+            }
 
             if (d.BlobTechnical is null)
             {

@@ -86,7 +86,32 @@ public sealed class AzureBlobDestinationOptions
     public string? ContentType { get; set; }
     /// <summary>Overwrite behavior for existing blobs. When omitted, the routing rule's Overwrite flag applies.</summary>
     public BlobOverwritePolicy? OverwritePolicy { get; set; }
+    /// <summary>
+    /// When set, a claim-check pointer message is published to Service Bus after every successful upload
+    /// to this destination. Omit to keep the destination a plain blob write.
+    /// </summary>
+    public BlobClaimCheckOptions? ClaimCheck { get; set; }
     public AzureBlobTechnicalOptions BlobTechnical { get; set; } = new(); // destination specific storage settings (auth, retries)
+}
+
+/// <summary>
+/// Post-write notification on a blob destination: after the blob is uploaded, publish a pointer to it on a
+/// Service Bus queue or topic instead of the file bytes (claim-check pattern).
+/// </summary>
+/// <remarks>
+/// There is deliberately no size threshold. Configuring ClaimCheck means every file routed to this
+/// destination is pointed at, so a producer and a consumer never have to agree on where a cutoff sits.
+///
+/// The blob write is ordered before the publish and a failed publish fails the whole transfer, so a pointer
+/// is never sent for bytes that are not in the container. The reverse is possible: the blob lands and the
+/// publish fails, leaving an orphan blob and a file that will be retried. So the validator requires
+/// OverwritePolicy: Overwrite on a claim-check destination -- under FailIfExists the retry would wedge
+/// permanently on the leftover blob.
+/// </remarks>
+public sealed class BlobClaimCheckOptions
+{
+    /// <summary>Logical name of an entry in Destinations:ServiceBus that receives the pointer message.</summary>
+    public string ServiceBusDestination { get; set; } = string.Empty;
 }
 
 public enum BlobContentTypeStrategy

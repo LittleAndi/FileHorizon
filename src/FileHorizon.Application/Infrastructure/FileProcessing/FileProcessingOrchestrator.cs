@@ -139,22 +139,7 @@ public sealed class FileProcessingOrchestrator(
         var finalContentType = configuredContentType ?? detectedContentType ?? "application/octet-stream";
         publishActivity?.SetTag("messaging.content_type", finalContentType);
         
-        // Build application properties: start with configured destination properties, then add runtime properties
-        var applicationProperties = new Dictionary<string, string>();
-        
-        // First: add configured custom properties from destination (if any)
-        if (destinationConfig?.ApplicationProperties is not null)
-        {
-            foreach (var kvp in destinationConfig.ApplicationProperties)
-            {
-                applicationProperties[kvp.Key] = kvp.Value;
-            }
-        }
-        
-        // Second: add runtime properties (these can override configured ones if keys collide)
-        applicationProperties["fh.fileId"] = fileEvent.Id;
-        applicationProperties["fh.protocol"] = fileEvent.Protocol;
-        
+        var applicationProperties = BuildApplicationProperties(destinationConfig, fileEvent);
         var request = new FilePublishRequest(
             SourcePath: fileEvent.Metadata.SourcePath,
             FileName: Path.GetFileName(fileEvent.Metadata.SourcePath),
@@ -199,7 +184,7 @@ public sealed class FileProcessingOrchestrator(
         var write = await sink.WriteAsync(targetRef, stream, plan.Options, ct).ConfigureAwait(false);
         if (write.IsFailure)
         {
-            return write;
+            return Result.Failure(write.Error);
         }
         await stream.DisposeAsync().ConfigureAwait(false);
         await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
@@ -226,14 +211,125 @@ public sealed class FileProcessingOrchestrator(
         {
             return Result.Failure(Error.Unspecified("Sink.AzureBlobMissing", "Azure Blob sink not registered"));
         }
+
+        // Resolve the claim-check target before the blob write. Resolving it afterwards leaves a window where a
+        // config hot-reload can drop the Service Bus entry between the two reads, failing the publish
+        // non-transiently with a blob already on disk. Failing here means nothing has been written yet.
+        ServiceBusDestinationOptions? claimCheckTarget = null;
+        if (destination.ClaimCheck is { } preCheck)
+        {
+            claimCheckTarget = _destinations.CurrentValue.ServiceBus
+                .FirstOrDefault(x => string.Equals(x.Name, preCheck.ServiceBusDestination, StringComparison.OrdinalIgnoreCase));
+            if (claimCheckTarget is null)
+            {
+                _logger.LogWarning("Claim-check on blob destination {Dest} references unknown Service Bus destination {Target}",
+                    destination.Name, preCheck.ServiceBusDestination);
+                return Result.Failure(Error.Validation.Invalid(
+                    $"Claim-check on blob destination '{destination.Name}' references unknown Service Bus destination '{preCheck.ServiceBusDestination}'"));
+            }
+        }
+
         var write = await sink.WriteAsync(targetRef, stream, plan.Options, ct).ConfigureAwait(false);
         if (write.IsFailure)
         {
-            return write;
+            return Result.Failure(write.Error);
         }
+
+        // Claim-check runs only after the upload reported success, so a pointer never names bytes that are
+        // not in the container yet.
+        if (destination.ClaimCheck is { } claimCheck)
+        {
+            var publish = await PublishClaimCheckAsync(fileEvent, destination, claimCheck, claimCheckTarget!, write.Value!, ct).ConfigureAwait(false);
+            if (publish.IsFailure)
+            {
+                // Fail the whole transfer. The blob is written but nothing downstream knows about it, and
+                // the caller only marks idempotency on success, so the file is retried rather than lost.
+                return publish;
+            }
+        }
+
         await stream.DisposeAsync().ConfigureAwait(false);
         await DeleteSourceIfRequestedAsync(fileEvent, ct).ConfigureAwait(false);
         return Result.Success();
+    }
+
+    /// <summary>
+    /// Publishes a pointer to a freshly written blob instead of its content (claim-check pattern).
+    /// The message carries the blob's own content type and the <c>claimCheck</c> application property;
+    /// the body is the envelope, not the file.
+    /// </summary>
+    private async Task<Result> PublishClaimCheckAsync(
+        FileEvent fileEvent,
+        AzureBlobDestinationOptions blobDestination,
+        BlobClaimCheckOptions claimCheck,
+        ServiceBusDestinationOptions serviceBusDestination,
+        FileWriteReceipt receipt,
+        CancellationToken ct)
+    {
+        using var activity = TelemetryInstrumentation.ActivitySource.StartActivity("claimcheck.publish", ActivityKind.Producer);
+        activity?.SetTag("messaging.system", "azure.servicebus");
+        activity?.SetTag("messaging.destination", claimCheck.ServiceBusDestination);
+        activity?.SetTag("blob.destination", blobDestination.Name);
+
+        if (receipt.Location is null)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, "Storage.NoLocation");
+            return Result.Failure(Error.Messaging.PublishError(
+                $"Blob destination '{blobDestination.Name}' is claim-checked but the sink reported no blob location"));
+        }
+        // AbsoluteUri, not ToString(): the latter is the unescaped display form, so a blob whose name has a
+        // space or non-ASCII character would produce a string a strict URL parser rejects.
+        activity?.SetTag("blob.uri", receipt.Location.AbsoluteUri);
+
+        // The content type describes what a consumer gets back when it fetches the blob, not the JSON it is
+        // reading right now -- that is what lets a consumer treat a resolved pointer and an inline message
+        // identically. It comes from the sink so the blob and the envelope can never disagree.
+        var envelope = new ClaimCheckEnvelope(receipt.Location.AbsoluteUri, receipt.ContentType, receipt.BytesWritten);
+        activity?.SetTag("messaging.content_type", receipt.ContentType);
+
+        var applicationProperties = BuildApplicationProperties(serviceBusDestination, fileEvent);
+        applicationProperties[ClaimCheckEnvelope.ApplicationPropertyName] = "true";
+
+        var request = new FilePublishRequest(
+            SourcePath: fileEvent.Metadata.SourcePath,
+            FileName: Path.GetFileName(fileEvent.Metadata.SourcePath),
+            Content: envelope.ToUtf8Json(),
+            ContentType: receipt.ContentType,
+            DestinationName: serviceBusDestination.Name,
+            IsTopic: serviceBusDestination.IsTopic,
+            ApplicationProperties: applicationProperties);
+
+        var publish = await _publisher.PublishAsync(request, ct).ConfigureAwait(false);
+        if (publish.IsFailure)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, publish.Error.ToString());
+            _logger.LogError("Wrote blob {BlobUri} but failed to publish its claim-check to {Destination}: {Error}. The file will be retried, leaving the blob orphaned",
+                receipt.Location, serviceBusDestination.Name, publish.Error);
+            return publish;
+        }
+        activity?.SetStatus(ActivityStatusCode.Ok);
+        _logger.LogInformation("Published claim-check for blob {BlobUri} ({Bytes} bytes) to {Destination}",
+            receipt.Location, receipt.BytesWritten, serviceBusDestination.Name);
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// Destination-configured properties first, then the runtime ones, which win on a key collision.
+    /// The validator rejects configuring a reserved key, so a collision means config changed under us.
+    /// </summary>
+    private static Dictionary<string, string> BuildApplicationProperties(ServiceBusDestinationOptions? destinationConfig, FileEvent fileEvent)
+    {
+        var applicationProperties = new Dictionary<string, string>();
+        if (destinationConfig?.ApplicationProperties is not null)
+        {
+            foreach (var kvp in destinationConfig.ApplicationProperties)
+            {
+                applicationProperties[kvp.Key] = kvp.Value;
+            }
+        }
+        applicationProperties["fh.fileId"] = fileEvent.Id;
+        applicationProperties["fh.protocol"] = fileEvent.Protocol;
+        return applicationProperties;
     }
 
     private Task<Result> DispatchDestinationAsync(FileEvent fileEvent, DestinationPlan plan, Stream stream, CancellationToken ct) =>
