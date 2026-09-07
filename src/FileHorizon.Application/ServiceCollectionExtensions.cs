@@ -131,8 +131,12 @@ public static class ServiceCollectionExtensions
         services.AddOptions<Configuration.ContentDetectionOptions>();
 
         // Records why the selection below fell back, so a caller that requires a durable store (the
-        // seeding command) can report the real cause instead of only "nothing durable is configured".
+        // seeding and import commands) can report the real cause instead of only "nothing durable is configured".
         services.AddSingleton<Infrastructure.Idempotency.IdempotencyStoreDiagnostics>();
+
+        // Used only by the one-off import command, registered here so it writes through the same store
+        // selection the pipeline gets.
+        services.AddSingleton<Infrastructure.Idempotency.IdempotencyImporter>();
 
         // Idempotency store selection: Redis (if enabled) -> file-backed (if DataDirectory set) -> in-memory.
         services.AddSingleton<Abstractions.IIdempotencyStore>(sp =>

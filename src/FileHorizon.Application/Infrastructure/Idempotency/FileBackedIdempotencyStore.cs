@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using FileHorizon.Application.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -21,18 +20,25 @@ public sealed class FileBackedIdempotencyStore : IIdempotencyStore, IDisposable
     private readonly StreamWriter _writer;
     private readonly ILogger<FileBackedIdempotencyStore> _logger;
 
+    /// <summary>
+    /// Absolute path of the backing file. Exposed so a caller that reads idempotency files itself - the
+    /// import command - can tell whether it has been pointed at this store's own file.
+    /// </summary>
+    public string FilePath { get; }
+
     public FileBackedIdempotencyStore(string filePath, ILogger<FileBackedIdempotencyStore> logger)
     {
         _logger = logger;
-        var directory = Path.GetDirectoryName(Path.GetFullPath(filePath));
+        FilePath = Path.GetFullPath(filePath);
+        var directory = Path.GetDirectoryName(FilePath);
         if (!string.IsNullOrEmpty(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
-        LoadExistingEntries(filePath);
+        LoadExistingEntries(FilePath);
 
-        var stream = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+        var stream = new FileStream(FilePath, FileMode.Append, FileAccess.Write, FileShare.Read);
         _writer = new StreamWriter(stream);
     }
 
@@ -52,7 +58,7 @@ public sealed class FileBackedIdempotencyStore : IIdempotencyStore, IDisposable
                 return false;
             }
             _entries[key] = expiry;
-            await _writer.WriteLineAsync(JsonSerializer.Serialize(new Entry(key, expiry))).ConfigureAwait(false);
+            await _writer.WriteLineAsync(JsonSerializer.Serialize(new IdempotencyFileEntry(key, expiry))).ConfigureAwait(false);
             await _writer.FlushAsync(ct).ConfigureAwait(false);
             return true;
         }
@@ -81,30 +87,14 @@ public sealed class FileBackedIdempotencyStore : IIdempotencyStore, IDisposable
             return;
         }
 
-        var loaded = 0;
-        var skipped = 0;
-        foreach (var line in File.ReadLines(filePath))
+        var contents = IdempotencyFileReader.Read(filePath);
+        foreach (var entry in contents.Entries)
         {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            try
-            {
-                var entry = JsonSerializer.Deserialize<Entry>(line);
-                if (entry?.Key is null)
-                {
-                    skipped++;
-                    continue;
-                }
-                // Last write wins for a key that appears multiple times.
-                _entries[entry.Key] = entry.ExpiresAtUtc;
-                loaded++;
-            }
-            catch (JsonException)
-            {
-                // A torn final line after a crash is expected; skip it.
-                skipped++;
-            }
+            _entries[entry.Key] = entry.ExpiresAtUtc;
         }
 
+        var loaded = contents.Entries.Count;
+        var skipped = contents.SkippedLines;
         if (skipped > 0)
         {
             _logger.LogWarning("Idempotency file {Path}: skipped {Skipped} unreadable line(s) while loading {Loaded} marker(s)", filePath, skipped, loaded);
@@ -114,8 +104,4 @@ public sealed class FileBackedIdempotencyStore : IIdempotencyStore, IDisposable
             _logger.LogInformation("Idempotency file {Path}: loaded {Loaded} marker(s)", filePath, loaded);
         }
     }
-
-    private sealed record Entry(
-        [property: JsonPropertyName("k")] string Key,
-        [property: JsonPropertyName("e")] DateTimeOffset? ExpiresAtUtc);
 }
