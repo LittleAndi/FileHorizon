@@ -14,7 +14,28 @@ using OpenTelemetry.Exporter.Prometheus;
 // Seeding flags are not configuration keys; keep them away from the command-line config provider,
 // which rejects bare switches. Configuration still comes from appsettings and the environment.
 var seedRequested = SeedIdempotencyCommand.IsRequested(args);
-var builder = WebApplication.CreateBuilder(seedRequested ? [] : args);
+string[] builderArgs = seedRequested ? [] : args;
+var webBuilder = WebApplication.CreateBuilder(builderArgs);
+
+// Http:Enabled=false runs FileHorizon as a plain worker that binds no port, so several instances can
+// share a server without each needing its own port. The switch is read through the web builder so it
+// honours every source the web host uses; the headless builder then inherits the resolved environment
+// (which may come from ASPNETCORE_ENVIRONMENT) so it loads the same appsettings.{env}.json.
+var httpOptions = webBuilder.Configuration.GetSection(HttpEndpointOptions.SectionName).Get<HttpEndpointOptions>() ?? new HttpEndpointOptions();
+HostApplicationBuilder? headlessBuilder = null;
+if (!httpOptions.Enabled)
+{
+    headlessBuilder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+    {
+        Args = builderArgs,
+        EnvironmentName = webBuilder.Environment.EnvironmentName,
+        ContentRootPath = webBuilder.Environment.ContentRootPath,
+        ApplicationName = webBuilder.Environment.ApplicationName,
+    });
+    // The web builder is no longer used; release its configuration (and appsettings file watchers).
+    webBuilder.Configuration.Dispose();
+}
+IHostApplicationBuilder builder = headlessBuilder is not null ? headlessBuilder : webBuilder;
 
 builder.Services.AddApplicationServices();
 builder.Services.Configure<PollingOptions>(builder.Configuration.GetSection(PollingOptions.SectionName));
@@ -100,7 +121,8 @@ builder.Services.AddOpenTelemetry()
         metrics.AddRuntimeInstrumentation();
         metrics.AddHttpClientInstrumentation();
         metrics.AddMeter(TelemetryInstrumentation.MeterName);
-        if (telemetryOptions.EnablePrometheus)
+        // The Prometheus exporter is scraped over HTTP; without the endpoint there is nothing to serve it.
+        if (telemetryOptions.EnablePrometheus && httpOptions.Enabled)
         {
             metrics.AddPrometheusExporter();
         }
@@ -119,7 +141,10 @@ builder.Services.AddOpenTelemetry()
         {
             tracing.SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(ratio)));
         }
-        tracing.AddAspNetCoreInstrumentation();
+        if (httpOptions.Enabled)
+        {
+            tracing.AddAspNetCoreInstrumentation();
+        }
         tracing.AddHttpClientInstrumentation();
         tracing.AddSource(TelemetryInstrumentation.ActivitySourceName);
         if (OtlpExporterConfig.IsEnabled(telemetryOptions))
@@ -128,7 +153,7 @@ builder.Services.AddOpenTelemetry()
         }
     });
 
-var app = builder.Build();
+IHost app = headlessBuilder is not null ? headlessBuilder.Build() : webBuilder.Build();
 
 if (seedRequested)
 {
@@ -145,16 +170,32 @@ if (seedRequested)
         Console.Error.WriteLine($"Configuration is invalid: {string.Join("; ", ex.Failures)}");
         seedExitCode = 2;
     }
-    await app.DisposeAsync();
+    await ((IAsyncDisposable)app).DisposeAsync();
     return seedExitCode;
 }
 
-app.MapHealthChecks("/health");
-
-// Expose Prometheus metrics scraping endpoint if enabled
-if (telemetryOptions.EnableMetrics && telemetryOptions.EnablePrometheus)
+if (app is WebApplication webApp)
 {
-    app.MapPrometheusScrapingEndpoint(); // default '/metrics'
+    webApp.MapHealthChecks("/health");
+
+    // Expose Prometheus metrics scraping endpoint if enabled
+    if (telemetryOptions.EnableMetrics && telemetryOptions.EnablePrometheus)
+    {
+        webApp.MapPrometheusScrapingEndpoint(); // default '/metrics'
+    }
+}
+else
+{
+    var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("FileHorizon.Host");
+    startupLogger.LogInformation("HTTP endpoint disabled (Http:Enabled=false): no port is bound and /health and /metrics are not served.");
+    // Prometheus is on by default, so an operator disabling HTTP may not have thought about metrics.
+    // Warn rather than fail: the pipeline itself is unaffected.
+    if (HttpEndpointOptions.IsPrometheusUnreachable(httpOptions, telemetryOptions))
+    {
+        startupLogger.LogWarning(
+            "Telemetry:EnablePrometheus is true but the HTTP endpoint is disabled, so metrics cannot be scraped. " +
+            "Export metrics over OTLP (Telemetry:EnableOtlpExporter) or set Telemetry:EnablePrometheus=false to silence this warning.");
+    }
 }
 
 app.Run();

@@ -59,6 +59,19 @@ docker run --rm -p 8080:8080 \
 	filehorizon:dev
 ```
 
+### Running Without the HTTP Endpoint
+
+By default FileHorizon serves `/health` and (when Prometheus is enabled) `/metrics` over HTTP. When several instances run directly on one server, outside containers, each one would need its own port, and a second instance with no URL configured fails at startup because the default port is already taken. Nothing in the pipeline needs HTTP, so the endpoint can be switched off:
+
+```
+Http__Enabled=false
+```
+
+With `Http:Enabled=false` (default `true`) FileHorizon runs as a plain worker process and binds no port at all; `ASPNETCORE_URLS` and `urls` are ignored. Polling, transfer, idempotency and telemetry export are unaffected. What you lose:
+
+- `/health` is not served, so use the process supervisor (Windows service, systemd) to watch the process instead.
+- `/metrics` is not served. Export metrics over OTLP instead (see [Enabling OTLP Export](#enabling-otlp-export)). If `Telemetry:EnablePrometheus` is still `true` (the default), a warning is logged at startup; set it to `false` to silence it.
+
 ---
 
 ## Pollers & Feature Flags
@@ -850,7 +863,7 @@ FileHorizon ships with unified tracing, metrics, and structured logging via **Op
 
 ### Prometheus Endpoint
 
-If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus scrape format. Health remains at `/health`.
+If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus scrape format. Health remains at `/health`. Both require the HTTP endpoint; with `Http:Enabled=false` (see [Running Without the HTTP Endpoint](#running-without-the-http-endpoint)) neither is served and metrics should go out over OTLP.
 
 ### Configuration
 
@@ -861,7 +874,7 @@ If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus
 | `EnableTracing`         | true                   | Enable Activity/trace pipeline                                 |
 | `EnableMetrics`         | true                   | Enable metrics collection                                      |
 | `EnableLogging`         | true                   | Route structured logs through OTEL exporter                    |
-| `EnablePrometheus`      | true                   | Expose `/metrics` endpoint                                     |
+| `EnablePrometheus`      | true                   | Expose `/metrics` endpoint (requires `Http:Enabled=true`)      |
 | `EnableOtlpExporter`    | false                  | Enable OTLP exporter for traces/metrics/logs                   |
 | `OtlpEndpoint`          | null                   | OTLP endpoint (e.g. `http://otel-collector:4317` for gRPC)     |
 | `OtlpProtocol`          | Grpc                   | Wire protocol: `Grpc` (port 4317) or `HttpProtobuf` (port 4318)|
