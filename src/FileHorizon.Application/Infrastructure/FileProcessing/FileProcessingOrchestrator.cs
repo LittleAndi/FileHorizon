@@ -59,7 +59,9 @@ public sealed class FileProcessingOrchestrator(
             idempotencyKey = FileIdentity.BuildIdempotencyKey(fileEvent.Metadata);
             if (await IsAlreadyProcessedAsync(idempotencyKey, ct).ConfigureAwait(false))
             {
-                _logger.LogInformation("Skipping already-transferred file {Key}", idempotencyKey);
+                _logger.LogDebug("Skipping already-transferred file {Key}", idempotencyKey);
+                activity?.SetTag("file.skipped", "idempotent");
+                TelemetryInstrumentation.FilesSkippedIdempotent.Add(1, KeyValuePair.Create<string, object?>("file.protocol", fileEvent.Protocol));
                 return Result.Success();
             }
         }

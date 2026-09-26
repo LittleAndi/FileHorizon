@@ -23,6 +23,7 @@ public static class TelemetryInstrumentation
     public static readonly Counter<long> PollSourceErrors = Meter.CreateCounter<long>("poll.source.errors", description: "Number of source-level poll errors");
     public static readonly Counter<long> FilesDiscovered = Meter.CreateCounter<long>("files.discovered", description: "Number of files discovered by pollers");
     public static readonly Counter<long> FilesSkippedUnstable = Meter.CreateCounter<long>("files.skipped.unstable", description: "Files skipped because not yet stable");
+    public static readonly Counter<long> FilesSkippedIdempotent = Meter.CreateCounter<long>("files.skipped.idempotent", description: "Files skipped because this exact version was already transferred");
 
     // Histograms
     public static readonly Histogram<double> ProcessingDurationMs = Meter.CreateHistogram<double>("processing.duration.ms", unit: "ms", description: "File processing duration in milliseconds");

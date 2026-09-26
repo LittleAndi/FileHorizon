@@ -123,7 +123,7 @@ All metrics support real-time updates, trend analysis, and visual status indicat
   - `files.processed`, `files.failed`
   - `bytes.copied`
   - `queue.enqueued`, `queue.dequeued`, `queue.enqueue.failures`, `queue.dequeue.failures`
-  - `poll.cycles`, `poll.source.errors`, `files.discovered`, `files.skipped.unstable`
+  - `poll.cycles`, `poll.source.errors`, `files.discovered`, `files.skipped.unstable`, `files.skipped.idempotent`
 - Histograms
   - `processing.duration.ms`, `poll.cycle.duration.ms`
 - Spans (ActivitySource: `FileHorizon.Pipeline`)

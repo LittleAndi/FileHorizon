@@ -1,11 +1,13 @@
 using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Common;
+using FileHorizon.Application.Common.Telemetry;
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Infrastructure.FileProcessing;
 using FileHorizon.Application.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Diagnostics.Metrics;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 
@@ -116,6 +118,47 @@ public class FileProcessingOrchestratorIdempotencyTests : IDisposable
 
         Assert.True(second.IsSuccess);
         Assert.False(File.Exists(DestFile)); // skipped, nothing written
+    }
+
+    [Fact]
+    public async Task SkippedFile_IncrementsIdempotentSkipCounter()
+    {
+        var store = new Infrastructure.Idempotency.InMemoryIdempotencyStore();
+        var orchestrator = CreateOrchestrator(store);
+
+        // The listener callback runs synchronously on the Add() call, so an AsyncLocal
+        // flag isolates this test's measurements from tests running in parallel.
+        var inThisTest = new AsyncLocal<bool>();
+        var measurements = new List<(long Value, object? Protocol)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == TelemetryInstrumentation.MeterName && instrument.Name == "files.skipped.idempotent")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            if (!inThisTest.Value) return;
+            object? protocol = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "file.protocol") protocol = tag.Value;
+            }
+            lock (measurements) measurements.Add((value, protocol));
+        });
+        listener.Start();
+        inThisTest.Value = true;
+
+        await orchestrator.ProcessAsync(NewEvent(), CancellationToken.None);
+        Assert.Empty(measurements); // first transfer is not a skip
+
+        await orchestrator.ProcessAsync(NewEvent(), CancellationToken.None);
+
+        var skip = Assert.Single(measurements);
+        Assert.Equal(1, skip.Value);
+        Assert.Equal("local", skip.Protocol);
     }
 
     [Fact]
