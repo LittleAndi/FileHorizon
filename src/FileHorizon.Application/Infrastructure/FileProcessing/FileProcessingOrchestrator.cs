@@ -62,7 +62,7 @@ public sealed class FileProcessingOrchestrator(
                 _logger.LogDebug("Skipping already-transferred file {Key}", idempotencyKey);
                 activity?.SetTag("file.skipped", "idempotent");
                 TelemetryInstrumentation.FilesSkippedIdempotent.Add(1, KeyValuePair.Create<string, object?>("file.protocol", fileEvent.Protocol));
-                return Result.Success();
+                return Result.Skipped();
             }
         }
 
@@ -74,7 +74,8 @@ public sealed class FileProcessingOrchestrator(
         }
         if (planResult.Value is null)
         {
-            return Result.Success(); // nothing to do; intentionally not marked so a routing fix transfers it
+            activity?.SetTag("file.skipped", "no_route");
+            return Result.Skipped(); // nothing to do; intentionally not marked so a routing fix transfers it
         }
         var plan = planResult.Value;
 

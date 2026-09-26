@@ -28,4 +28,14 @@ public class ResultTests
         Assert.True(r.IsSuccess);
         Assert.Equal("abc", r.Value);
     }
+
+    [Fact]
+    public void Skipped_Result_Is_A_Success_Flagged_As_Skipped()
+    {
+        var r = Result.Skipped();
+        Assert.True(r.IsSuccess);
+        Assert.True(r.IsSkipped);
+        Assert.False(Result.Success().IsSkipped);
+        Assert.False(Result.Failure(Error.File.SizeUnstable).IsSkipped);
+    }
 }
