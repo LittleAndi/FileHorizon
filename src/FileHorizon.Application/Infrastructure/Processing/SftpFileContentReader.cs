@@ -132,16 +132,15 @@ public sealed class SftpFileContentReader : IFileContentReader
             path = file.Path;
             return true;
         }
-        // Attempt to parse identity key form: sftp://host:port/absolute/path
-        if (!string.IsNullOrWhiteSpace(file.Path) && file.Path.StartsWith("sftp://", StringComparison.OrdinalIgnoreCase))
+        // Identity key form: sftp://host:port/absolute/path. The path is used verbatim so names with
+        // spaces, '#', '?', '%' or non-ASCII reach the server exactly as listed.
+        if (ProtocolIdentity.TryParseRemoteKey(file.Path, out var scheme, out var keyHost, out var keyPort, out var keyPath)
+            && string.Equals(scheme, "sftp", StringComparison.OrdinalIgnoreCase))
         {
-            if (Uri.TryCreate(file.Path, UriKind.Absolute, out var uri))
-            {
-                host = uri.Host;
-                port = uri.IsDefaultPort ? 22 : uri.Port;
-                path = uri.AbsolutePath;
-                return !string.IsNullOrWhiteSpace(host) && !string.IsNullOrWhiteSpace(path);
-            }
+            host = keyHost;
+            port = keyPort > 0 ? keyPort : 22;
+            path = keyPath;
+            return true;
         }
         return false;
     }

@@ -15,8 +15,9 @@ public sealed class SftpFileContentReaderTests
         public FakeSftpClient(byte[] data, DateTimeOffset mtime)
         { _data = data; _mtime = mtime; }
         public Task ConnectAsync(CancellationToken ct) => Task.CompletedTask;
-        public (long Size, DateTimeOffset LastWriteTimeUtc) GetAttributes(string path) => (_data.Length, _mtime);
-        public Stream OpenRead(string path) => new MemoryStream(_data, writable: false);
+        public string? LastPath { get; private set; }
+        public (long Size, DateTimeOffset LastWriteTimeUtc) GetAttributes(string path) { LastPath = path; return (_data.Length, _mtime); }
+        public Stream OpenRead(string path) { LastPath = path; return new MemoryStream(_data, writable: false); }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
@@ -24,7 +25,14 @@ public sealed class SftpFileContentReaderTests
     {
         private readonly ISftpClient _client;
         public FakeFactory(ISftpClient client) { _client = client; }
-        public ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, IReadOnlyList<string>? hostKeyFingerprints = null, bool strictHostKey = false) => _client;
+        public string? Host { get; private set; }
+        public int Port { get; private set; }
+        public ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, IReadOnlyList<string>? hostKeyFingerprints = null, bool strictHostKey = false)
+        {
+            Host = host;
+            Port = port;
+            return _client;
+        }
     }
 
     [Fact]
@@ -57,6 +65,47 @@ public sealed class SftpFileContentReaderTests
         var n = await s.ReadAsync(buf);
         Assert.Equal(3, n);
         Assert.Equal(data, buf);
+    }
+
+    [Theory]
+    [InlineData("/in/my file.txt")]
+    [InlineData("/in/order#1.txt")]
+    [InlineData("/in/what?.txt")]
+    [InlineData("/in/a%20b.txt")]
+    [InlineData("/in/åäö.txt")]
+    public async Task OpenRead_and_GetAttributes_use_the_raw_remote_path(string remotePath)
+    {
+        var client = new FakeSftpClient([1, 2, 3], DateTimeOffset.UtcNow);
+        var factory = new FakeFactory(client);
+        var reader = new SftpFileContentReader(new NullLogger<SftpFileContentReader>(), factory);
+        var key = Common.ProtocolIdentity.BuildKey(Common.ProtocolType.Sftp, "h", 2222, remotePath);
+        var file = new FileReference("sftp", null, null, key, null);
+
+        var open = await reader.OpenReadAsync(file, CancellationToken.None);
+        Assert.True(open.IsSuccess);
+        await open.Value!.DisposeAsync();
+        Assert.Equal(remotePath, client.LastPath);
+        Assert.Equal("h", factory.Host);
+        Assert.Equal(2222, factory.Port);
+
+        var attrs = await reader.GetAttributesAsync(file, CancellationToken.None);
+        Assert.True(attrs.IsSuccess);
+        Assert.Equal(remotePath, client.LastPath);
+    }
+
+    [Fact]
+    public async Task OpenRead_defaults_to_port_22_when_key_has_no_port()
+    {
+        var client = new FakeSftpClient([1], DateTimeOffset.UtcNow);
+        var factory = new FakeFactory(client);
+        var reader = new SftpFileContentReader(new NullLogger<SftpFileContentReader>(), factory);
+        var file = new FileReference("sftp", null, null, "sftp://h/in/a b.txt", null);
+
+        var open = await reader.OpenReadAsync(file, CancellationToken.None);
+        Assert.True(open.IsSuccess);
+        await open.Value!.DisposeAsync();
+        Assert.Equal(22, factory.Port);
+        Assert.Equal("/in/a b.txt", client.LastPath);
     }
 
     [Fact]
