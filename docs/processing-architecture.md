@@ -144,6 +144,7 @@ Implemented metrics (see `TelemetryInstrumentation`):
 - `processing.duration.ms` (histogram)
 - `poll.cycles`, `poll.cycle.duration.ms`
 - `files.discovered`, `files.skipped.unstable`
+- `files.skipped.idempotent` (orchestrator skipped a file version already transferred; tagged `file.protocol`)
 - Queue metrics: `queue.enqueued`, `queue.dequeued`, `queue.enqueue.failures`, `queue.dequeue.failures`
 
 Not yet implemented (previously listed aspirationally):
