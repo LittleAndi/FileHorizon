@@ -1053,4 +1053,4 @@ Pipeline__Role=Poller
 Pipeline__Role=Worker
 ```
 
-`Pipeline__Role` fully determines polling vs processing. There is no separate switch for transfer side effects: every processing role copies, moves and (when configured) deletes files.
+`Pipeline__Role` fully determines polling vs processing. There is no separate switch for transfer side effects: every processing role copies files and (when configured) deletes the source.

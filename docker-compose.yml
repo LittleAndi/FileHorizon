@@ -107,7 +107,6 @@ services:
       - Logging__LogLevel__Microsoft.Hosting.Lifetime=Warning
       - Logging__LogLevel__FileHorizon=Debug
       - Pipeline__Role=Worker
-      # Delete remote file after successful transfer (optional; defaults false)
       - Features__EnableLocalPoller=false
       - Features__EnableFtpPoller=false
       - Features__EnableSftpPoller=false # keep false to avoid double polling
