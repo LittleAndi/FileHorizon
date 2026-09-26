@@ -55,7 +55,6 @@ Runtime configuration is provided via `appsettings.json` / environment variables
 ```
 docker run --rm -p 8080:8080 \
 	-e "Pipeline__Role=All" \
-	-e "Features__EnableFileTransfer=true" \
 	filehorizon:dev
 ```
 
@@ -80,12 +79,13 @@ File discovery is handled by protocol-specific pollers composed by a multi-proto
 
 Feature flags (section `Features`):
 
-| Flag                 | Default | Purpose                                                                                           |
-| -------------------- | ------- | ------------------------------------------------------------------------------------------------- |
-| `EnableLocalPoller`  | `true`  | Enable local/UNC directory polling sources configured under `FileSources` (legacy/local).         |
-| `EnableFtpPoller`    | `false` | Enable FTP remote sources listed in `RemoteFileSources:Sources`.                                  |
-| `EnableSftpPoller`   | `false` | Enable SFTP remote sources listed in `RemoteFileSources:Sources`.                                 |
-| `EnableFileTransfer` | `false` | Perform the actual transfer/move (side effects). When `false`, pipeline simulates discovery only. |
+| Flag                | Default | Purpose                                                                                   |
+| ------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `EnableLocalPoller` | `true`  | Enable local/UNC directory polling sources configured under `FileSources` (legacy/local). |
+| `EnableFtpPoller`   | `false` | Enable FTP remote sources listed in `RemoteFileSources:Sources`.                          |
+| `EnableSftpPoller`  | `false` | Enable SFTP remote sources listed in `RemoteFileSources:Sources`.                         |
+
+There is no dry-run switch: any instance whose role processes events (`All` or `Worker`) transfers files for real, and deletes sources configured with `DeleteAfterTransfer: true`. An older `Features:EnableFileTransfer` key was never read and has been removed; if it is still in your configuration it is ignored.
 
 <!-- Orchestrated processor is now the default; no flag required. -->
 
@@ -95,7 +95,6 @@ Environment variable examples:
 Features__EnableLocalPoller=true
 Features__EnableFtpPoller=false
 Features__EnableSftpPoller=true
-Features__EnableFileTransfer=true
 ```
 
 If all three poller flags are disabled the composite poller runs with an empty set (harmless no-op). This is useful for staging environments while only processing already enqueued events.
@@ -743,15 +742,13 @@ The compose file sets sensible defaults:
 - `FileSources__Sources__0__*` defines the first file source (InboxA). Add more sources incrementally:
   - `FileSources__Sources__1__Name=InboxB`
   - `FileSources__Sources__1__Path=/data/inboxB`
-- Change `Features__EnableFileTransfer` to `true` to perform actual file transfers once implemented.
-  Pipeline orchestration now uses `Pipeline__Role` to determine which background services run (see section below). `Features__EnableFileTransfer` only controls whether real file movement occurs.
+- `Pipeline__Role` determines which background services run (see section below). Any role that processes events (`All`, `Worker`) performs real transfers.
 
 You can override any value using an `.env` file placed next to `docker-compose.yml`:
 
 ```
 # .env example
 PIPELINE__ROLE=All
-FEATURES__ENABLEFILETRANSFER=false
 REDIS__ENABLED=true
 POLLING__INTERVALMILLISECONDS=500
 ```
@@ -785,11 +782,9 @@ Example: one poller + multiple workers
 ```
 # poller (enqueue only, no processing)
 Pipeline__Role=Poller
-Features__EnableFileTransfer=false
 
 # worker (process only)
 Pipeline__Role=Worker
-Features__EnableFileTransfer=true
 ```
 
 Alternatively (common simpler pattern):
@@ -797,11 +792,9 @@ Alternatively (common simpler pattern):
 ```
 # single poller that also processes
 Pipeline__Role=All
-Features__EnableFileTransfer=true
 
 # additional workers (no polling - processing only)
 Pipeline__Role=Worker
-Features__EnableFileTransfer=true
 ```
 
 > Reminder (WSL + containerd): If you previously built with `docker build`, rebuild with `nerdctl build` to ensure the image exists in the containerd image store before scaling.
@@ -1060,4 +1053,4 @@ Pipeline__Role=Poller
 Pipeline__Role=Worker
 ```
 
-`Pipeline__Role` fully determines polling vs processing. The only remaining feature flag in this area is `Features__EnableFileTransfer` which toggles actual file copy/move side effects.
+`Pipeline__Role` fully determines polling vs processing. There is no separate switch for transfer side effects: every processing role copies files and (when configured) deletes the source.

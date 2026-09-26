@@ -44,7 +44,7 @@ Status: Implemented (baseline)
 ## Configuration & Secrets (Updated)
 
 - `RemoteFileSourcesOptions` with per-source protocol, host, path, credential secret references.
-- `PipelineFeaturesOptions` now includes: `EnableLocalPoller`, `EnableFtpPoller`, `EnableSftpPoller`, `EnableFileTransfer`.
+- `PipelineFeaturesOptions` now includes: `EnableLocalPoller`, `EnableFtpPoller`, `EnableSftpPoller`. (`EnableFileTransfer` was removed: it was never read, and transfers always ran.)
 - Secret resolution currently uses an in-memory + environment resolver; production to swap with Key Vault implementation.
 - Future: introduce Service Bus options (`ServiceBusIngressOptions`, `ServiceBusEgressOptions`).
 
