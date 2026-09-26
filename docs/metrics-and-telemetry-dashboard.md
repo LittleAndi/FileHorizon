@@ -17,6 +17,7 @@ Based on the current FileHorizon implementation, this document marks which metri
 ### **3. Success Rate** ✅
 
 - What we have: Counters `files.processed`, `files.failed` (protocol-tagged). UI can compute percentage over a 24h window.
+- `files.processed` counts files transferred to a destination. Files the orchestrator skips (already transferred per the idempotency store, or no destination plan) are not counted, so re-enqueued backlog after a restart does not show up as successes. `processing.duration.ms` likewise excludes skips. Idempotent skips are counted in `files.skipped.idempotent` instead.
 
 ### **4. System Load** ❌
 
@@ -120,12 +121,12 @@ All metrics support real-time updates, trend analysis, and visual status indicat
 ## 📦 Current instrumentation inventory (for dashboard bindings)
 
 - Counters
-  - `files.processed`, `files.failed`
+  - `files.processed` (transfers only; skipped files excluded), `files.failed`
   - `bytes.copied`
   - `queue.enqueued`, `queue.dequeued`, `queue.enqueue.failures`, `queue.dequeue.failures`
   - `poll.cycles`, `poll.source.errors`, `files.discovered`, `files.skipped.unstable`, `files.skipped.idempotent`
 - Histograms
-  - `processing.duration.ms`, `poll.cycle.duration.ms`
+  - `processing.duration.ms` (transfers and failures; skipped files excluded), `poll.cycle.duration.ms`
 - Spans (ActivitySource: `FileHorizon.Pipeline`)
   - `pipeline.lifetime`
   - `file.process` (FileProcessingService)

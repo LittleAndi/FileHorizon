@@ -49,6 +49,13 @@ public sealed class FileProcessingService(IFileProcessor fileProcessor, ILogger<
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.ToString());
             _logger.LogWarning("File event {FileId} failed: {Error}", fileEvent.Id, result.Error);
         }
+        else if (result.IsSkipped)
+        {
+            // Nothing was transferred, so keep it out of files.processed and processing.duration.ms;
+            // after a restart a retained backlog would otherwise inflate both.
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            _logger.LogDebug("File event {FileId} skipped; nothing transferred", fileEvent.Id);
+        }
         else
         {
             _telemetry.RecordSuccess(fileEvent.Protocol, elapsedMs);

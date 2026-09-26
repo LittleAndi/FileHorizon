@@ -4,19 +4,26 @@ public readonly struct Result
 {
     public bool IsSuccess { get; }
     public bool IsFailure => !IsSuccess;
+    /// <summary>
+    /// True when the operation succeeded without doing its work (e.g. the file was already transferred),
+    /// so callers can keep it out of throughput metrics. Always implies <see cref="IsSuccess"/>.
+    /// </summary>
+    public bool IsSkipped { get; }
     public Error Error { get; }
 
-    private Result(bool isSuccess, Error error)
+    private Result(bool isSuccess, Error error, bool isSkipped = false)
     {
         IsSuccess = isSuccess;
         Error = error;
+        IsSkipped = isSkipped;
     }
 
     public static Result Success() => new(true, Error.None);
+    public static Result Skipped() => new(true, Error.None, isSkipped: true);
     public static Result Failure(Error error)
         => new(false, error == Error.None ? Error.Unspecified("ResultFailureNone", "Attempted to create a failure result with Error.None") : error);
 
-    public override string ToString() => IsSuccess ? "Success" : $"Failure: {Error}";
+    public override string ToString() => IsSuccess ? (IsSkipped ? "Skipped" : "Success") : $"Failure: {Error}";
 }
 
 public readonly struct Result<T>

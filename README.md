@@ -851,14 +851,14 @@ FileHorizon ships with unified tracing, metrics, and structured logging via **Op
 
 - Traces: file processing spans (`file.process`, `file.orchestrate`), reader/sink spans (`reader.open`, `sink.write`), queue enqueue/dequeue spans (`queue.enqueue`, `queue.dequeue`), lifecycle span (`pipeline.lifetime`).
 - Metrics (Meter `FileHorizon`):
-  - `files.processed` (counter)
+  - `files.processed` (counter; transfers only, skipped files excluded)
   - `files.failed` (counter)
   - `bytes.copied` (counter)
   - `queue.enqueued` (counter)
   - `queue.enqueue.failures` (counter)
   - `queue.dequeued` (counter)
   - `queue.dequeue.failures` (counter)
-  - `processing.duration.ms` (histogram)
+  - `processing.duration.ms` (histogram; skipped files excluded)
   - `poll.cycle.duration.ms` (histogram)
 
 ### Prometheus Endpoint
