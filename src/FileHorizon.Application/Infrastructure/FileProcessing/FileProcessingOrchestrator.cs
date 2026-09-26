@@ -483,15 +483,12 @@ public sealed class FileProcessingOrchestrator(
         host = string.Empty;
         port = 0;
         remotePath = string.Empty;
-        if (string.IsNullOrWhiteSpace(sourcePath)) return false;
-        if (!Uri.TryCreate(sourcePath, UriKind.Absolute, out var uri)) return false;
-        host = uri.Host;
-        port = uri.Port;
-        if (port <= 0 || uri.IsDefaultPort)
+        // Not Uri: its AbsolutePath is percent-encoded, so a name with a space would miss the real file.
+        if (!ProtocolIdentity.TryParseRemoteKey(sourcePath, out _, out host, out port, out remotePath)) return false;
+        if (port <= 0)
         {
             port = isSftp ? 22 : 21;
         }
-        remotePath = uri.AbsolutePath;
         return true;
     }
 
