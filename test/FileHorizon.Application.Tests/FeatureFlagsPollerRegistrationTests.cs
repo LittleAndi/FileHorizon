@@ -19,7 +19,6 @@ public class FeatureFlagsPollerRegistrationTests
         services.AddOptions<PollingOptions>();
         services.AddOptions<PipelineFeaturesOptions>().Configure(o =>
         {
-            o.EnableFileTransfer = true;
             o.EnableLocalPoller = enableLocal;
             o.EnableFtpPoller = enableFtp;
             o.EnableSftpPoller = enableSftp;

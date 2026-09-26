@@ -30,7 +30,6 @@ services:
       - Logging__LogLevel__Microsoft=Information
       - Logging__LogLevel__FileHorizon=Debug
       - Pipeline__Role=Poller
-      - Features__EnableFileTransfer=false
       - Features__EnableLocalPoller=true
       - Features__EnableFtpPoller=false
       - Features__EnableSftpPoller=true
@@ -109,7 +108,6 @@ services:
       - Logging__LogLevel__FileHorizon=Debug
       - Pipeline__Role=Worker
       # Delete remote file after successful transfer (optional; defaults false)
-      - Features__EnableFileTransfer=true
       - Features__EnableLocalPoller=false
       - Features__EnableFtpPoller=false
       - Features__EnableSftpPoller=false # keep false to avoid double polling

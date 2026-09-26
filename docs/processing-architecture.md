@@ -198,7 +198,7 @@ These remain in the roadmap and will be added once multi-destination routing is 
 
 ## Backward compatibility & rollout
 
-- Feature flags gate new behavior (`EnableFileTransfer`, destination/sink enablement flags if needed).
+- Feature flags gate new behavior (destination/sink enablement flags if needed). There is no transfer on/off switch; an opt-in dry-run mode may be added later.
 - Can run orchestrator in shadow mode (read & route only) while still executing the legacy local processor, to verify route decisions via telemetry before switching.
 
 ## Open questions (carried forward)
