@@ -38,11 +38,30 @@ public sealed class ProtocolIdentityTests
     }
 
     [Theory]
+    [InlineData("[::1]", 22, "[::1]", 22)]
+    [InlineData("[::1]", 0, "[::1]", 0)]
+    [InlineData("sftp.example.com", 22, "sftp.example.com", 22)]
+    public void TryParseRemoteKey_returns_host_as_built(string configuredHost, int configuredPort, string expectedHost, int expectedPort)
+    {
+        var key = ProtocolIdentity.BuildKey(ProtocolType.Sftp, configuredHost, configuredPort, "/in/a b.txt");
+
+        Assert.True(ProtocolIdentity.TryParseRemoteKey(key, out _, out var host, out var port, out var path));
+        Assert.Equal(expectedHost, host);
+        Assert.Equal(expectedPort, port);
+        Assert.Equal("/in/a b.txt", path);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("/local/path.txt")]
     [InlineData("sftp://host:22")]
     [InlineData("sftp://:22/path")]
+    [InlineData("sftp://h:/path")]
+    [InlineData("sftp://h:+22/path")]
+    [InlineData("sftp://h:0/path")]
+    [InlineData("sftp://h:99999999999/path")]
+    [InlineData("sftp://h:22relative/path")]
     public void TryParseRemoteKey_rejects_non_remote_keys(string? key)
     {
         Assert.False(ProtocolIdentity.TryParseRemoteKey(key, out _, out _, out _, out _));

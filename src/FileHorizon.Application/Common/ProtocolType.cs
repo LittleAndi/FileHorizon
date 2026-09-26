@@ -40,16 +40,19 @@ public static class ProtocolIdentity
         var pathStart = key.IndexOf('/', authorityStart);
         if (pathStart < 0) return false;
 
+        // The host is returned exactly as BuildKey wrote it (a bracketed IPv6 host keeps its brackets) so it
+        // still matches the configured source Host.
         var authority = key[authorityStart..pathStart];
         var portSeparator = authority.LastIndexOf(':');
-        if (portSeparator >= 0 && int.TryParse(authority[(portSeparator + 1)..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsedPort))
+        if (portSeparator >= 0 && !authority.EndsWith(']'))
         {
-            port = parsedPort;
+            if (!int.TryParse(authority[(portSeparator + 1)..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out port)
+                || port is < 1 or > 65535)
+            {
+                port = 0;
+                return false;
+            }
             authority = authority[..portSeparator];
-        }
-        if (authority.Length > 1 && authority[0] == '[' && authority[^1] == ']')
-        {
-            authority = authority[1..^1];
         }
         if (authority.Length == 0) return false;
 
