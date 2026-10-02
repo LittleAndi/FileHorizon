@@ -19,6 +19,7 @@ WORKDIR /src
 
 # Copy solution and project files first to leverage layer caching
 COPY FileHorizon.sln ./
+COPY src/Directory.Build.props src/
 COPY src/FileHorizon.Application/FileHorizon.Application.csproj src/FileHorizon.Application/
 COPY src/FileHorizon.Host/FileHorizon.Host.csproj src/FileHorizon.Host/
 COPY test/FileHorizon.Application.Tests/FileHorizon.Application.Tests.csproj test/FileHorizon.Application.Tests/
