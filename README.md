@@ -26,6 +26,7 @@ Optional build args:
 
 - `BUILD_CONFIGURATION` (default `Release`)
 - `UID` / `GID` to align container user with host filesystem permissions
+- `VERSION` to stamp the build version (e.g. `--build-arg VERSION=0.2.0`). `.git` is not part of the build context, so without it the image reports `0.0.0-alpha.0`; see [Versioning](#versioning)
 
 ### Run (example)
 
@@ -890,7 +891,7 @@ If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus
 | `OtlpHeaders`           | null                   | Additional OTLP headers, comma separated (key=value,key2=value2) |
 | `TracesSampleRatio`     | null                   | null = sample all; `0..1` = parent-based ratio sampler         |
 | `ServiceName`           | FileHorizon            | Override service.name resource attribute                       |
-| `ServiceVersion`        | Assembly version       | Override service.version                                       |
+| `ServiceVersion`        | Build version          | Override service.version (see [Versioning](#versioning))       |
 | `DeploymentEnvironment` | ASPNETCORE_ENVIRONMENT | Adds `deployment.environment` attribute                        |
 
 Environment variable mapping uses double underscores, e.g.:
@@ -900,6 +901,18 @@ Telemetry__EnableOtlpExporter=true
 Telemetry__OtlpEndpoint=http://otel-collector:4317
 Telemetry__DeploymentEnvironment=dev
 ```
+
+### Versioning
+
+The build version comes from git tags via [MinVer](https://github.com/adamralph/minver) (configured in `src/Directory.Build.props`):
+
+| Commit                    | Version reported in `service.version`      |
+| ------------------------- | ------------------------------------------ |
+| Tagged `v0.2.0`           | `0.2.0+<commit sha>`                       |
+| 3 commits after `v0.2.0`  | `0.2.1-alpha.0.3+<commit sha>`             |
+| No tag in history         | `0.0.0-alpha.0.<height>+<commit sha>`      |
+
+A release is cut by tagging `main` (`git tag v0.2.0 && git push upstream v0.2.0`). Builds need the full git history to see tags (CI checks out with `fetch-depth: 0`). Where there is no `.git` directory, such as the Docker build context, pass the version explicitly: `dotnet publish -p:MinVerVersionOverride=0.2.0` or `docker build --build-arg VERSION=0.2.0`. `Telemetry:ServiceVersion` still overrides the reported value at runtime.
 
 ### Enabling OTLP Export
 
