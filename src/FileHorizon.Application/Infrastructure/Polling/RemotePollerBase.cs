@@ -100,7 +100,12 @@ public abstract class RemotePollerBase : IFilePoller
         {
             await client.ConnectAsync(ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ct.IsCancellationRequested && ex is not OperationCanceledException)
+        {
+            // Same as the listing below: an error raised while shutdown is in progress is cancellation, not a source failure.
+            throw new OperationCanceledException("Polling was cancelled while connecting to the source.", ex, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             _logger.LogWarning(ex, "Failed to connect to {Protocol} source {Name}@{Host}:{Port}", client.Protocol, source.Name, client.Host, client.Port);
             RecordSourceError(client, source);

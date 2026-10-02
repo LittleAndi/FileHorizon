@@ -27,14 +27,19 @@ public class RemotePollerTests
         private readonly List<FakeRemoteFile> _files;
         private readonly bool _failConnect;
         private readonly Exception? _listFailure;
-        public FakeRemoteClient(string host, int port, ProtocolType protocol, IEnumerable<FakeRemoteFile> files, bool failConnect = false, Exception? listFailure = null)
-        { Host = host; Port = port; Protocol = protocol; _files = files.ToList(); _failConnect = failConnect; _listFailure = listFailure; }
+        private readonly Exception? _connectFailure;
+        public FakeRemoteClient(string host, int port, ProtocolType protocol, IEnumerable<FakeRemoteFile> files, bool failConnect = false, Exception? listFailure = null, Exception? connectFailure = null)
+        { Host = host; Port = port; Protocol = protocol; _files = files.ToList(); _failConnect = failConnect; _listFailure = listFailure; _connectFailure = connectFailure; }
         public string Host { get; }
         public int Port { get; }
         public ProtocolType Protocol { get; }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public Task ConnectAsync(CancellationToken ct)
-        { if (_failConnect) throw new InvalidOperationException("connect fail"); return Task.CompletedTask; }
+        {
+            if (_connectFailure is not null) throw _connectFailure;
+            if (_failConnect) throw new InvalidOperationException("connect fail");
+            return Task.CompletedTask;
+        }
         public async IAsyncEnumerable<IRemoteFileInfo> ListFilesAsync(string remotePath, bool recursive, string pattern, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
         {
             foreach (var f in _files) { yield return new FakeRemoteFileInfo(f.FullPath, f.Size, f.LastWrite, f.IsDir); await Task.Yield(); }
@@ -285,5 +290,23 @@ public class RemotePollerTests
         await poller.PollAsync(CancellationToken.None);
 
         Assert.Equal(new object?[] { "list-fails", "connect-fails" }, sources);
+    }
+
+    [Theory]
+    [InlineData(false)] // cancellation surfaces as OperationCanceledException
+    [InlineData(true)]  // SSH.NET teardown surfaces as a non-cancellation error
+    public async Task PollAsync_ShutdownDuringConnect_IsReportedAsCancellation(bool teardownError)
+    {
+        var opts = CreateOptions(new FtpSourceOptions { Name = "f1", Host = "h", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
+        using var cts = new CancellationTokenSource();
+        var poller = new TestRemotePoller(new TestQueue(), opts, _ =>
+        {
+            cts.Cancel();
+            Exception failure = teardownError ? new ObjectDisposedException("session") : new OperationCanceledException(cts.Token);
+            return new FakeRemoteClient("h", 21, ProtocolType.Ftp, Array.Empty<FakeRemoteFile>(), connectFailure: failure);
+        });
+
+        // Swallowing it would mean a "Failed to connect" warning, a poll.source.errors increment and backoff for a shutdown.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poller.PollAsync(cts.Token));
     }
 }
