@@ -69,7 +69,7 @@ if (telemetryValidation.Failed)
 var resourceBuilder = ResourceBuilder.CreateDefault()
     .AddService(
         serviceName: telemetryOptions.ServiceName ?? "FileHorizon",
-        serviceVersion: telemetryOptions.ServiceVersion ?? typeof(Program).Assembly.GetName().Version?.ToString() ?? "1.0.0",
+        serviceVersion: ServiceVersion.Resolve(typeof(Program).Assembly, telemetryOptions.ServiceVersion),
         serviceInstanceId: Environment.MachineName)
     .AddAttributes(new[]
     {
