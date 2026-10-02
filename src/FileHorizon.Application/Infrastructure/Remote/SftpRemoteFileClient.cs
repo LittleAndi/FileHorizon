@@ -10,6 +10,8 @@ namespace FileHorizon.Application.Infrastructure.Remote;
 /// <summary>
 /// SFTP implementation of <see cref="IRemoteFileClient"/> using SSH.NET.
 /// Note: SSH.NET lacks native cancellation for many operations; cooperative cancellation is applied where feasible.
+/// A request the server never answers is bounded by the configured <see cref="SftpTimeouts"/> instead, and
+/// fails with <c>SshOperationTimeoutException</c>.
 /// </summary>
 public sealed class SftpRemoteFileClient : IRemoteFileClient
 {
@@ -22,6 +24,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
     private readonly string? _privateKeyPassphrase;
     private readonly IReadOnlyList<string>? _hostKeyFingerprints;
     private readonly bool _strictHostKey;
+    private readonly SftpTimeouts _timeouts;
     private SftpClient? _client;
 
     public SftpRemoteFileClient(
@@ -33,7 +36,8 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         string? privateKeyPem,
         string? privateKeyPassphrase,
         IReadOnlyList<string>? hostKeyFingerprints = null,
-        bool strictHostKey = false)
+        bool strictHostKey = false,
+        SftpTimeouts? timeouts = null)
     {
         _logger = logger;
         _host = host;
@@ -44,6 +48,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         _privateKeyPassphrase = privateKeyPassphrase;
         _hostKeyFingerprints = hostKeyFingerprints;
         _strictHostKey = strictHostKey;
+        _timeouts = timeouts ?? SftpTimeouts.Default;
     }
 
     public ProtocolType Protocol => ProtocolType.Sftp;
@@ -89,6 +94,7 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         {
             client = new SftpClient(_host, _port, _username, _password ?? string.Empty);
         }
+        SshClientTimeouts.Apply(client, _timeouts);
         client.HostKeyReceived += (_, e) =>
             e.CanTrust = SshHostKeyValidator.Validate(_logger, _host, _port, _hostKeyFingerprints, _strictHostKey, e.HostKeyName, e.HostKey);
         return client;

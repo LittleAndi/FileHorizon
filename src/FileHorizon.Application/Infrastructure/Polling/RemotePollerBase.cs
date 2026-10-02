@@ -100,9 +100,15 @@ public abstract class RemotePollerBase : IFilePoller
         {
             await client.ConnectAsync(ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ct.IsCancellationRequested && ex is not OperationCanceledException)
+        {
+            // Same as the listing below: an error raised while shutdown is in progress is cancellation, not a source failure.
+            throw new OperationCanceledException("Polling was cancelled while connecting to the source.", ex, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             _logger.LogWarning(ex, "Failed to connect to {Protocol} source {Name}@{Host}:{Port}", client.Protocol, source.Name, client.Host, client.Port);
+            RecordSourceError(client, source);
             RegisterFailure(source.Name);
             return;
         }
@@ -116,99 +122,128 @@ public abstract class RemotePollerBase : IFilePoller
         var unstableCount = 0;
         var duplicateCount = 0;
 
-        await foreach (var file in client.ListFilesAsync(source.RemotePath, source.Recursive, source.Pattern, ct).ConfigureAwait(false))
+        try
         {
-            seen++;
-            if (ct.IsCancellationRequested) break;
-            if (file.IsDirectory) continue;
-
-            var key = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
-            _observations.TryGetValue(key, out var prev);
-            // Only the exact dispatched version counts; a changed size/mtime is a new version to re-dispatch.
-            var alreadyDispatched = _dispatched.TryGetValue(key, out var dispatchedVersion)
-                && dispatchedVersion.Size == file.Size
-                && dispatchedVersion.MTime == file.LastWriteTimeUtc;
-
-            // Explain readiness decision
-            if (_logger.IsEnabled(LogLevel.Trace))
+            await foreach (var file in client.ListFilesAsync(source.RemotePath, source.Recursive, source.Pattern, ct).ConfigureAwait(false))
             {
-                if (prev is null)
+                seen++;
+                if (ct.IsCancellationRequested) break;
+                if (file.IsDirectory) continue;
+
+                var key = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
+                _observations.TryGetValue(key, out var prev);
+                // Only the exact dispatched version counts; a changed size/mtime is a new version to re-dispatch.
+                var alreadyDispatched = _dispatched.TryGetValue(key, out var dispatchedVersion)
+                    && dispatchedVersion.Size == file.Size
+                    && dispatchedVersion.MTime == file.LastWriteTimeUtc;
+
+                // Explain readiness decision
+                if (_logger.IsEnabled(LogLevel.Trace))
                 {
-                    if (window > TimeSpan.Zero)
-                        _logger.LogTrace("First observation for {Key}; waiting windowSec={Window}", key, (int)window.TotalSeconds);
+                    if (prev is null)
+                    {
+                        if (window > TimeSpan.Zero)
+                            _logger.LogTrace("First observation for {Key}; waiting windowSec={Window}", key, (int)window.TotalSeconds);
+                        else
+                            _logger.LogTrace("First observation for {Key}; window=0 so ready if unchanged checks pass", key);
+                    }
                     else
-                        _logger.LogTrace("First observation for {Key}; window=0 so ready if unchanged checks pass", key);
+                    {
+                        var changed = prev.Size != file.Size || prev.LastWriteTimeUtc != file.LastWriteTimeUtc;
+                        if (changed)
+                        {
+                            _logger.LogTrace("Unstable {Key}: changed size/mtime (prev: {PrevSize},{PrevMTime:o} -> curr: {Size},{MTime:o})",
+                                key, prev.Size, prev.LastWriteTimeUtc, file.Size, file.LastWriteTimeUtc);
+                        }
+                        else
+                        {
+                            var stableForTrace = DateTimeOffset.UtcNow - prev.LastObservedUtc;
+                            _logger.LogTrace("Stable {Key}: stableForSec={StableFor}/{WindowSec}", key, (int)stableForTrace.TotalSeconds, (int)window.TotalSeconds);
+                        }
+                    }
+                }
+
+                var now = DateTimeOffset.UtcNow;
+                var unchanged = prev is not null &&
+                                prev.Size == file.Size &&
+                                prev.LastWriteTimeUtc == file.LastWriteTimeUtc;
+
+                // Keep the old LastObservedUtc as the stability baseline if unchanged; otherwise reset.
+                FileObservationSnapshot newSnap;
+                if (unchanged)
+                {
+                    // Do NOT move the baseline; this lets stable duration accumulate.
+                    newSnap = new FileObservationSnapshot(
+                        file.Size,
+                        file.LastWriteTimeUtc,
+                        prev!.FirstObservedUtc,
+                        prev.LastObservedUtc); // preserve last unchanged baseline
                 }
                 else
                 {
-                    var changed = prev.Size != file.Size || prev.LastWriteTimeUtc != file.LastWriteTimeUtc;
-                    if (changed)
-                    {
-                        _logger.LogTrace("Unstable {Key}: changed size/mtime (prev: {PrevSize},{PrevMTime:o} -> curr: {Size},{MTime:o})",
-                            key, prev.Size, prev.LastWriteTimeUtc, file.Size, file.LastWriteTimeUtc);
-                    }
-                    else
-                    {
-                        var stableForTrace = DateTimeOffset.UtcNow - prev.LastObservedUtc;
-                        _logger.LogTrace("Stable {Key}: stableForSec={StableFor}/{WindowSec}", key, (int)stableForTrace.TotalSeconds, (int)window.TotalSeconds);
-                    }
+                    // Content (size/mtime) changed -> reset baseline to now.
+                    newSnap = new FileObservationSnapshot(
+                        file.Size,
+                        file.LastWriteTimeUtc,
+                        prev?.FirstObservedUtc ?? now,
+                        now);
                 }
+
+                _observations[key] = newSnap;
+
+                var stableFor = prev is null ? TimeSpan.Zero : (DateTimeOffset.UtcNow - newSnap.LastObservedUtc);
+                // Recompute readiness using original previous snapshot (prev) which had the old baseline
+                var ready = await readiness.IsReadyAsync(file, prev, ct).ConfigureAwait(false);
+
+                if (!ready)
+                {
+                    unstableCount++;
+                    Common.Telemetry.TelemetryInstrumentation.FilesSkippedUnstable.Add(1, KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()));
+                    continue;
+                }
+
+                if (alreadyDispatched)
+                {
+                    duplicateCount++;
+                    _logger.LogTrace("Suppressing duplicate dispatch for {Key}", key);
+                    continue;
+                }
+
+                await EnqueueEventAsync(source, client, file, key, ct).ConfigureAwait(false);
+                _dispatched[key] = (newSnap.Size, newSnap.LastWriteTimeUtc);
+                readyCount++;
             }
-
-            var now = DateTimeOffset.UtcNow;
-            var unchanged = prev is not null &&
-                            prev.Size == file.Size &&
-                            prev.LastWriteTimeUtc == file.LastWriteTimeUtc;
-
-            // Keep the old LastObservedUtc as the stability baseline if unchanged; otherwise reset.
-            FileObservationSnapshot newSnap;
-            if (unchanged)
-            {
-                // Do NOT move the baseline; this lets stable duration accumulate.
-                newSnap = new FileObservationSnapshot(
-                    file.Size,
-                    file.LastWriteTimeUtc,
-                    prev!.FirstObservedUtc,
-                    prev.LastObservedUtc); // preserve last unchanged baseline
-            }
-            else
-            {
-                // Content (size/mtime) changed -> reset baseline to now.
-                newSnap = new FileObservationSnapshot(
-                    file.Size,
-                    file.LastWriteTimeUtc,
-                    prev?.FirstObservedUtc ?? now,
-                    now);
-            }
-
-            _observations[key] = newSnap;
-
-            var stableFor = prev is null ? TimeSpan.Zero : (DateTimeOffset.UtcNow - newSnap.LastObservedUtc);
-            // Recompute readiness using original previous snapshot (prev) which had the old baseline
-            var ready = await readiness.IsReadyAsync(file, prev, ct).ConfigureAwait(false);
-
-            if (!ready)
-            {
-                unstableCount++;
-                Common.Telemetry.TelemetryInstrumentation.FilesSkippedUnstable.Add(1, KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()));
-                continue;
-            }
-
-            if (alreadyDispatched)
-            {
-                duplicateCount++;
-                _logger.LogTrace("Suppressing duplicate dispatch for {Key}", key);
-                continue;
-            }
-
-            await EnqueueEventAsync(source, client, file, key, ct).ConfigureAwait(false);
-            _dispatched[key] = (newSnap.Size, newSnap.LastWriteTimeUtc);
-            readyCount++;
         }
+        catch (Exception ex) when (ct.IsCancellationRequested && ex is not OperationCanceledException)
+        {
+            // Shutdown can surface from SSH.NET as a connection or disposal error while a synchronous call is
+            // blocked. That is not a source failure: report it as the cancellation it is.
+            throw new OperationCanceledException("Polling was cancelled while listing the source.", ex, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            // A failed listing or enqueue (including an SFTP operation timeout on a half-open connection) must not abort
+            // the cycle for other sources. Files seen before the failure keep their observations and dispatches.
+            _logger.LogError(ex, "Poll failed for {Protocol} source {Name}@{Host}:{Port} path={Path} after {Seen} item(s)",
+                client.Protocol, source.Name, client.Host, client.Port, source.RemotePath, seen);
+            RecordSourceError(client, source);
+            RegisterFailure(source.Name);
+            return;
+        }
+
+        // A listing cut short by shutdown is neither a success nor a failure: leave backoff and logs alone.
+        if (ct.IsCancellationRequested) return;
+
+        ResetBackoff(source.Name);
 
         _logger.LogDebug("Completed listing for source {Name}. itemsSeen={Seen}, ready={Ready}, unstable={Unstable}, duplicate={Duplicate}",
             source.Name, seen, readyCount, unstableCount, duplicateCount);
     }
+
+    private static void RecordSourceError(IRemoteFileClient client, IRemoteFileSourceDescriptor source)
+        => Common.Telemetry.TelemetryInstrumentation.PollSourceErrors.Add(1,
+            KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()),
+            KeyValuePair.Create<string, object?>("poll.source", source.Name));
 
     private async Task EnqueueEventAsync(IRemoteFileSourceDescriptor source, IRemoteFileClient client, IRemoteFileInfo file, string identityKey, CancellationToken ct)
     {

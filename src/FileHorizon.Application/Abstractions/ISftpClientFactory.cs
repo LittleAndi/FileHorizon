@@ -17,6 +17,7 @@ public interface ISftpClientFactory
     /// Create an SFTP client using either password or private key authentication. One of password or privateKeyPem must be provided.
     /// When <paramref name="hostKeyFingerprints"/> is non-empty, the server host key must match at least one entry or the connection is rejected.
     /// When <paramref name="strictHostKey"/> is true and no fingerprints are configured, the connection is rejected.
+    /// <paramref name="timeouts"/> bounds connect and per-request waits; <see cref="SftpTimeouts.Default"/> when null.
     /// </summary>
-    ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, IReadOnlyList<string>? hostKeyFingerprints = null, bool strictHostKey = false);
+    ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, IReadOnlyList<string>? hostKeyFingerprints = null, bool strictHostKey = false, SftpTimeouts? timeouts = null);
 }
