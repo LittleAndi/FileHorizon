@@ -1,8 +1,11 @@
 using System.Text;
 using FileHorizon.Application.Abstractions;
+using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Infrastructure.Processing;
 using FileHorizon.Application.Models;
+using FileHorizon.Application.Tests.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace FileHorizon.Application.Tests;
 
@@ -27,10 +30,12 @@ public sealed class SftpFileContentReaderTests
         public FakeFactory(ISftpClient client) { _client = client; }
         public string? Host { get; private set; }
         public int Port { get; private set; }
-        public ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, IReadOnlyList<string>? hostKeyFingerprints = null, bool strictHostKey = false)
+        public SftpTimeouts? Timeouts { get; private set; }
+        public ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, IReadOnlyList<string>? hostKeyFingerprints = null, bool strictHostKey = false, SftpTimeouts? timeouts = null)
         {
             Host = host;
             Port = port;
+            Timeouts = timeouts;
             return _client;
         }
     }
@@ -117,5 +122,37 @@ public sealed class SftpFileContentReaderTests
         var file = new FileReference("local", null, null, "C:/tmp/file.txt", null);
         var res = await reader.OpenReadAsync(file, CancellationToken.None);
         Assert.False(res.IsSuccess);
+    }
+
+    [Fact]
+    public async Task OpenRead_passes_the_configured_source_timeouts_to_the_factory()
+    {
+        var factory = new FakeFactory(new FakeSftpClient([1], DateTimeOffset.UtcNow));
+        var options = new OptionsMonitorStub<RemoteFileSourcesOptions>(new RemoteFileSourcesOptions
+        {
+            Sftp = [new SftpSourceOptions { Name = "partner", Host = "h", Port = 22, OperationTimeoutSeconds = 90, KeepAliveIntervalSeconds = 0, ConnectTimeoutSeconds = 15 }]
+        });
+        var reader = new SftpFileContentReader(new NullLogger<SftpFileContentReader>(), factory, options, Substitute.For<ISecretResolver>());
+        var file = new FileReference("sftp", null, null, "sftp://h:22/in/a.bin", "partner");
+
+        var open = await reader.OpenReadAsync(file, CancellationToken.None);
+        Assert.True(open.IsSuccess);
+        await open.Value!.DisposeAsync();
+
+        Assert.Equal(new SftpTimeouts(TimeSpan.FromSeconds(90), TimeSpan.Zero, TimeSpan.FromSeconds(15)), factory.Timeouts);
+    }
+
+    [Fact]
+    public async Task GetAttributes_uses_default_timeouts_when_no_source_matches()
+    {
+        var factory = new FakeFactory(new FakeSftpClient([1], DateTimeOffset.UtcNow));
+        var options = new OptionsMonitorStub<RemoteFileSourcesOptions>(new RemoteFileSourcesOptions());
+        var reader = new SftpFileContentReader(new NullLogger<SftpFileContentReader>(), factory, options, Substitute.For<ISecretResolver>());
+        var file = new FileReference("sftp", null, null, "sftp://h:22/in/a.bin", null);
+
+        var attrs = await reader.GetAttributesAsync(file, CancellationToken.None);
+        Assert.True(attrs.IsSuccess);
+
+        Assert.Equal(SftpTimeouts.Default, factory.Timeouts);
     }
 }

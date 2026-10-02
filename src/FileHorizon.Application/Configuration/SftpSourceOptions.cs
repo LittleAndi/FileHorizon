@@ -56,4 +56,26 @@ public sealed class SftpSourceOptions
     /// </summary>
     public bool DeleteAfterTransfer { get; set; } = false;
     public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Maximum seconds to wait for the response to a single SFTP request (one directory read batch,
+    /// one attribute lookup, one read chunk) before failing it. Must be &gt; 0. A large listing is made
+    /// of many requests, so this does not cap the total listing time.
+    /// </summary>
+    public int OperationTimeoutSeconds { get; set; } = Abstractions.SftpTimeouts.DefaultOperationSeconds;
+
+    /// <summary>
+    /// Seconds between SSH keep-alive messages, so a connection that died silently is detected.
+    /// 0 disables keep-alives. Must be &gt;= 0.
+    /// </summary>
+    public int KeepAliveIntervalSeconds { get; set; } = Abstractions.SftpTimeouts.DefaultKeepAliveSeconds;
+
+    /// <summary>
+    /// Maximum seconds to wait for connecting and completing the SSH handshake. Must be &gt; 0.
+    /// </summary>
+    public int ConnectTimeoutSeconds { get; set; } = Abstractions.SftpTimeouts.DefaultConnectSeconds;
+
+    /// <summary>The configured network timeouts for this source.</summary>
+    public Abstractions.SftpTimeouts Timeouts() =>
+        Abstractions.SftpTimeouts.FromSeconds(OperationTimeoutSeconds, KeepAliveIntervalSeconds, ConnectTimeoutSeconds);
 }

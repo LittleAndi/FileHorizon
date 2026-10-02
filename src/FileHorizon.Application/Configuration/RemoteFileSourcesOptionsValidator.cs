@@ -117,6 +117,20 @@ public sealed class RemoteFileSourcesOptionsValidator : IValidateOptions<RemoteF
                         errors.Add($"{prefix}: Host key fingerprint '{fingerprint}' is not a recognised format; expected OpenSSH SHA256 ('SHA256:<base64>'), bare base64 SHA256, or legacy MD5 colon-separated hex.");
                     }
                 }
+                // Upper bound keeps the value within SSH.NET's int-milliseconds limit.
+                const int maxTimeoutSeconds = int.MaxValue / 1000;
+                if (sftp.OperationTimeoutSeconds <= 0 || sftp.OperationTimeoutSeconds > maxTimeoutSeconds)
+                {
+                    errors.Add($"{prefix}: OperationTimeoutSeconds must be between 1 and {maxTimeoutSeconds} (was {sftp.OperationTimeoutSeconds}); without a timeout a half-open connection hangs the poller.");
+                }
+                if (sftp.KeepAliveIntervalSeconds < 0 || sftp.KeepAliveIntervalSeconds > maxTimeoutSeconds)
+                {
+                    errors.Add($"{prefix}: KeepAliveIntervalSeconds must be between 0 (disabled) and {maxTimeoutSeconds} (was {sftp.KeepAliveIntervalSeconds}).");
+                }
+                if (sftp.ConnectTimeoutSeconds <= 0 || sftp.ConnectTimeoutSeconds > maxTimeoutSeconds)
+                {
+                    errors.Add($"{prefix}: ConnectTimeoutSeconds must be between 1 and {maxTimeoutSeconds} (was {sftp.ConnectTimeoutSeconds}).");
+                }
             }
         }
 
