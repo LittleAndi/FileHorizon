@@ -24,6 +24,12 @@ public sealed class SftpFileContentReaderTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class ThrowingFactory : ISftpClientFactory
+    {
+        public ISftpClient Create(string host, int port, string username, string? password, string? privateKeyPem, string? privateKeyPassphrase, IReadOnlyList<string>? hostKeyFingerprints = null, bool strictHostKey = false, SftpTimeouts? timeouts = null)
+            => throw new ArgumentOutOfRangeException(nameof(timeouts), "rejected by SSH.NET");
+    }
+
     private sealed class FakeFactory : ISftpClientFactory
     {
         private readonly ISftpClient _client;
@@ -154,5 +160,18 @@ public sealed class SftpFileContentReaderTests
         Assert.True(attrs.IsSuccess);
 
         Assert.Equal(SftpTimeouts.Default, factory.Timeouts);
+    }
+
+    [Fact]
+    public async Task Client_creation_failure_is_returned_as_a_failed_result()
+    {
+        var reader = new SftpFileContentReader(new NullLogger<SftpFileContentReader>(), new ThrowingFactory());
+        var file = new FileReference("sftp", null, null, "sftp://h:22/in/a.bin", null);
+
+        var open = await reader.OpenReadAsync(file, CancellationToken.None);
+        var attrs = await reader.GetAttributesAsync(file, CancellationToken.None);
+
+        Assert.False(open.IsSuccess);
+        Assert.False(attrs.IsSuccess);
     }
 }

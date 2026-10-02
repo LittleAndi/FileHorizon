@@ -49,10 +49,10 @@ public sealed class SftpFileContentReader : IFileContentReader
         {
             return Result<FileAttributesInfo>.Failure(Error.Validation.Invalid("Invalid SFTP file reference; host/port/path missing"));
         }
-        var creds = await ResolveCredentialsAsync(file.SourceName, host, port, ct).ConfigureAwait(false);
-        await using var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase, creds.HostKeyFingerprints, creds.StrictHostKey, creds.Timeouts);
+        var settings = await ResolveConnectionAsync(file.SourceName, host, port, ct).ConfigureAwait(false);
         try
         {
+            await using var client = CreateClient(host, port, settings);
             await client.ConnectAsync(ct).ConfigureAwait(false);
             var attrs = client.GetAttributes(remotePath);
             return Result<FileAttributesInfo>.Success(new FileAttributesInfo(attrs.Size, attrs.LastWriteTimeUtc, null));
@@ -74,11 +74,12 @@ public sealed class SftpFileContentReader : IFileContentReader
         {
             return Result<Stream>.Failure(Error.Validation.Invalid("Invalid SFTP file reference; host/port/path missing"));
         }
-        var creds = await ResolveCredentialsAsync(file.SourceName, host, port, ct).ConfigureAwait(false);
-        // REMOVE await using (must keep client alive for stream lifetime)
-        var client = _factory.Create(host, port, creds.Username, creds.Password, creds.PrivateKeyPem, creds.PrivateKeyPassphrase, creds.HostKeyFingerprints, creds.StrictHostKey, creds.Timeouts);
+        var settings = await ResolveConnectionAsync(file.SourceName, host, port, ct).ConfigureAwait(false);
+        // No await using: the client must stay alive for the stream's lifetime.
+        ISftpClient? client = null;
         try
         {
+            client = CreateClient(host, port, settings);
             await client.ConnectAsync(ct).ConfigureAwait(false);
             var stream = client.OpenRead(remotePath);
             // Client disposed when caller disposes returned stream
@@ -86,19 +87,34 @@ public sealed class SftpFileContentReader : IFileContentReader
         }
         catch (Exception ex)
         {
-            await client.DisposeAsync().ConfigureAwait(false);
+            if (client is not null) await client.DisposeAsync().ConfigureAwait(false);
             _logger.LogWarning(ex, "Failed to open SFTP stream: {Host}:{Port}{Path}", host, port, remotePath);
             return Result<Stream>.Failure(Error.Unspecified("Sftp.OpenReadFailed", ex.Message));
         }
     }
 
-    private async Task<(string Username, string? Password, string? PrivateKeyPem, string? PrivateKeyPassphrase, IReadOnlyList<string>? HostKeyFingerprints, bool StrictHostKey, SftpTimeouts Timeouts)>
-        ResolveCredentialsAsync(string? sourceName, string host, int port, CancellationToken ct)
+    /// <summary>Everything needed to open a connection to one SFTP source, with secrets resolved.</summary>
+    private sealed record ConnectionSettings(
+        string Username,
+        string? Password = null,
+        string? PrivateKeyPem = null,
+        string? PrivateKeyPassphrase = null,
+        IReadOnlyList<string>? HostKeyFingerprints = null,
+        bool StrictHostKey = false,
+        SftpTimeouts? Timeouts = null)
+    {
+        public static ConnectionSettings Anonymous { get; } = new("anonymous");
+    }
+
+    private ISftpClient CreateClient(string host, int port, ConnectionSettings s) =>
+        _factory.Create(host, port, s.Username, s.Password, s.PrivateKeyPem, s.PrivateKeyPassphrase, s.HostKeyFingerprints, s.StrictHostKey, s.Timeouts ?? SftpTimeouts.Default);
+
+    private async Task<ConnectionSettings> ResolveConnectionAsync(string? sourceName, string host, int port, CancellationToken ct)
     {
         // Defaults for backward compatibility in tests or if options not bound
         if (_remoteOptions is null || _secretResolver is null)
         {
-            return ("anonymous", null, null, null, null, false, SftpTimeouts.Default);
+            return ConnectionSettings.Anonymous;
         }
 
         var current = _remoteOptions.CurrentValue;
@@ -111,7 +127,7 @@ public sealed class SftpFileContentReader : IFileContentReader
         {
             // No matching config; fall back to anonymous
             _logger.LogDebug("No SFTP source matched for {Host}:{Port} (sourceName={SourceName}); using anonymous", host, port, sourceName);
-            return ("anonymous", null, null, null, null, false, SftpTimeouts.Default);
+            return ConnectionSettings.Anonymous;
         }
 
         var username = string.IsNullOrWhiteSpace(sftp.Username) ? "anonymous" : sftp.Username!;
@@ -119,7 +135,7 @@ public sealed class SftpFileContentReader : IFileContentReader
         var privateKeyPem = await _secretResolver.ResolveSecretAsync(sftp.PrivateKeySecretRef, ct).ConfigureAwait(false);
         var privateKeyPass = await _secretResolver.ResolveSecretAsync(sftp.PrivateKeyPassphraseSecretRef, ct).ConfigureAwait(false);
 
-        return (username, password, privateKeyPem, privateKeyPass, sftp.AllHostKeyFingerprints(), sftp.StrictHostKey, sftp.Timeouts());
+        return new ConnectionSettings(username, password, privateKeyPem, privateKeyPass, sftp.AllHostKeyFingerprints(), sftp.StrictHostKey, sftp.Timeouts());
     }
 
     private static bool TryResolveEndpoint(FileReference file, out string host, out int port, out string path)

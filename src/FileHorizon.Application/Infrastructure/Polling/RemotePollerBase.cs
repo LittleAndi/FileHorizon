@@ -103,6 +103,7 @@ public abstract class RemotePollerBase : IFilePoller
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to connect to {Protocol} source {Name}@{Host}:{Port}", client.Protocol, source.Name, client.Host, client.Port);
+            RecordSourceError(client, source);
             RegisterFailure(source.Name);
             return;
         }
@@ -208,21 +209,36 @@ public abstract class RemotePollerBase : IFilePoller
                 readyCount++;
             }
         }
-        catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+        catch (Exception ex) when (ct.IsCancellationRequested && ex is not OperationCanceledException)
+        {
+            // Shutdown can surface from SSH.NET as a connection or disposal error while a synchronous call is
+            // blocked. That is not a source failure: report it as the cancellation it is.
+            throw new OperationCanceledException("Polling was cancelled while listing the source.", ex, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             // A failed listing or enqueue (including an SFTP operation timeout on a half-open connection) must not abort
             // the cycle for other sources. Files seen before the failure keep their observations and dispatches.
             _logger.LogError(ex, "Poll failed for {Protocol} source {Name}@{Host}:{Port} path={Path} after {Seen} item(s)",
                 client.Protocol, source.Name, client.Host, client.Port, source.RemotePath, seen);
+            RecordSourceError(client, source);
             RegisterFailure(source.Name);
             return;
         }
+
+        // A listing cut short by shutdown is neither a success nor a failure: leave backoff and logs alone.
+        if (ct.IsCancellationRequested) return;
 
         ResetBackoff(source.Name);
 
         _logger.LogDebug("Completed listing for source {Name}. itemsSeen={Seen}, ready={Ready}, unstable={Unstable}, duplicate={Duplicate}",
             source.Name, seen, readyCount, unstableCount, duplicateCount);
     }
+
+    private static void RecordSourceError(IRemoteFileClient client, IRemoteFileSourceDescriptor source)
+        => Common.Telemetry.TelemetryInstrumentation.PollSourceErrors.Add(1,
+            KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()),
+            KeyValuePair.Create<string, object?>("poll.source", source.Name));
 
     private async Task EnqueueEventAsync(IRemoteFileSourceDescriptor source, IRemoteFileClient client, IRemoteFileInfo file, string identityKey, CancellationToken ct)
     {

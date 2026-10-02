@@ -60,14 +60,20 @@ public sealed class SftpSourceOptions
     /// <summary>
     /// Maximum seconds to wait for the response to a single SFTP request (one directory read batch,
     /// one attribute lookup, one read chunk) before failing it. Must be &gt; 0. A large listing is made
-    /// of many requests, so this does not cap the total listing time.
+    /// of many requests, so this does not cap the total listing time. This is the setting that stops a
+    /// half-open connection (server stops answering without closing the socket) from hanging the caller.
     /// </summary>
     public int OperationTimeoutSeconds { get; set; } = Abstractions.SftpTimeouts.DefaultOperationSeconds;
 
     /// <summary>
-    /// Seconds between SSH keep-alive messages, so a connection that died silently is detected.
+    /// Seconds between SSH keep-alive messages, which keep idle connections open through NAT and firewalls.
     /// 0 disables keep-alives. Must be &gt;= 0.
     /// </summary>
+    /// <remarks>
+    /// Keep-alives are one-way messages that expect no reply, so they do not detect a half-open connection
+    /// on their own; at best the OS gives up on the unacknowledged send after its retransmission timeout
+    /// (minutes). <see cref="OperationTimeoutSeconds"/> is what bounds a stalled request.
+    /// </remarks>
     public int KeepAliveIntervalSeconds { get; set; } = Abstractions.SftpTimeouts.DefaultKeepAliveSeconds;
 
     /// <summary>

@@ -7,6 +7,8 @@ using FileHorizon.Application.Tests.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
+using FileHorizon.Application.Common.Telemetry;
 
 namespace FileHorizon.Application.Tests;
 
@@ -229,5 +231,59 @@ public class RemotePollerTests
 
         // Shutdown cancellation is not a source failure: it must reach the host loop rather than be logged and swallowed.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poller.PollAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task PollAsync_NonCancellationErrorDuringShutdown_IsReportedAsCancellation()
+    {
+        var opts = CreateOptions(new FtpSourceOptions { Name = "f1", Host = "h", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
+        using var cts = new CancellationTokenSource();
+        // SSH.NET teardown during shutdown surfaces as a connection/disposal error rather than a cancellation.
+        var poller = new TestRemotePoller(new TestQueue(), opts, _ =>
+        {
+            cts.Cancel();
+            return new FakeRemoteClient("h", 21, ProtocolType.Ftp, Array.Empty<FakeRemoteFile>(), listFailure: new ObjectDisposedException("session"));
+        });
+
+        var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poller.PollAsync(cts.Token));
+        Assert.IsType<ObjectDisposedException>(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task PollAsync_SourceFailures_IncrementPollSourceErrors()
+    {
+        var opts = CreateOptions(
+            new FtpSourceOptions { Name = "list-fails", Host = "a", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 },
+            new FtpSourceOptions { Name = "connect-fails", Host = "b", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
+        var clientsCreated = 0;
+        var poller = new TestRemotePoller(new TestQueue(), opts, _ => clientsCreated++ == 0
+            ? new FakeRemoteClient("a", 21, ProtocolType.Ftp, Array.Empty<FakeRemoteFile>(), listFailure: new TimeoutException("operation timed out"))
+            : new FakeRemoteClient("b", 21, ProtocolType.Ftp, Array.Empty<FakeRemoteFile>(), failConnect: true));
+
+        // The counter is process-wide; the AsyncLocal flag isolates this test's measurements from parallel tests.
+        var inThisTest = new AsyncLocal<bool>();
+        var sources = new List<object?>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == TelemetryInstrumentation.MeterName && instrument.Name == "poll.source.errors")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            if (!inThisTest.Value) return;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "poll.source") lock (sources) sources.Add(tag.Value);
+            }
+        });
+        listener.Start();
+        inThisTest.Value = true;
+
+        await poller.PollAsync(CancellationToken.None);
+
+        Assert.Equal(new object?[] { "list-fails", "connect-fails" }, sources);
     }
 }

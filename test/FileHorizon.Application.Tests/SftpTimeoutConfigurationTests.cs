@@ -97,12 +97,16 @@ public class SftpTimeoutConfigurationTests
     }
 
     [Fact]
-    public void Invalid_timeouts_on_disabled_source_are_ignored()
+    public void Invalid_timeouts_on_disabled_source_still_fail_validation()
     {
+        // Downloads of files queued before a source was disabled still use its settings.
         var sftp = ValidSource();
         sftp.Enabled = false;
         sftp.OperationTimeoutSeconds = 0;
 
-        Assert.True(Validate(sftp).Succeeded);
+        var result = Validate(sftp);
+
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, f => f.Contains("OperationTimeoutSeconds"));
     }
 }

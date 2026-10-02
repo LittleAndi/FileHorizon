@@ -166,7 +166,7 @@ Validation rules enforced at startup:
 - `MinStableSeconds` must be >= 0.
 - Every configured host key fingerprint must be a recognised format (see below).
 - `StrictHostKey: true` requires at least one fingerprint, otherwise every connection would be rejected.
-- SFTP `OperationTimeoutSeconds` and `ConnectTimeoutSeconds` must be > 0; `KeepAliveIntervalSeconds` must be >= 0.
+- SFTP `OperationTimeoutSeconds` and `ConnectTimeoutSeconds` must be between 1 and 2147483; `KeepAliveIntervalSeconds` must be between 0 and 2147483. There is no "infinite" setting. These are checked for disabled sources too.
 
 ### SFTP Timeouts
 
@@ -175,7 +175,7 @@ Each SFTP source bounds how long it waits on the server. The same values apply t
 | Setting | Default | Meaning |
 | ------- | ------- | ------- |
 | `OperationTimeoutSeconds` | 60 | Maximum wait for the response to one SFTP request. A directory listing is made of many requests, so a large listing can take longer than this in total. |
-| `KeepAliveIntervalSeconds` | 30 | Interval between SSH keep-alive messages. `0` disables them. |
+| `KeepAliveIntervalSeconds` | 30 | Interval between SSH keep-alive messages, which keep idle connections open through NAT and firewalls. `0` disables them. Keep-alives expect no reply, so they do not detect a stalled server; `OperationTimeoutSeconds` does. |
 | `ConnectTimeoutSeconds` | 30 | Maximum wait for the TCP connect and SSH handshake. |
 
 When a request times out (for example on a half-open connection, where the server stops answering without closing the socket) the poll for that source fails with an error log, the source goes into backoff, and the next poll opens a new connection. Other sources keep polling.
