@@ -173,8 +173,8 @@
       },
       "Microsoft.Extensions.FileSystemGlobbing": {
         "type": "Transitive",
-        "resolved": "10.0.9",
-        "contentHash": "mvRf9qOH/LslWIee/h+lsElnoUyKotEwoPL31soqScmO/eoxObaTCLCdx2DdqPdRi9LnB+7qKZ49jfyrLZuc+w=="
+        "resolved": "10.0.13",
+        "contentHash": "vQVzmAbnzlhXSXA2caYnlxtG9GXxEwtj5bODiWLu06A6iqeJmfBtlfKjuOSJGRy0/CFaNUrm7u9nxEUlljc2Rg=="
       },
       "Microsoft.Extensions.Hosting.Abstractions": {
         "type": "Transitive",
@@ -414,7 +414,7 @@
           "Azure.Messaging.ServiceBus": "[7.20.1, )",
           "Azure.Storage.Blobs": "[12.29.1, )",
           "FluentFTP": "[54.2.0, )",
-          "Microsoft.Extensions.FileSystemGlobbing": "[10.0.9, )",
+          "Microsoft.Extensions.FileSystemGlobbing": "[10.0.13, )",
           "SSH.NET": "[2026.0.0, )",
           "StackExchange.Redis": "[2.13.17, )"
         }
