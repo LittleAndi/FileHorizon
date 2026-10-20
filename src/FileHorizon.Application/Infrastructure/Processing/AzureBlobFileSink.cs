@@ -30,17 +30,17 @@ public sealed class AzureBlobFileSink(
 
     public string Name => SinkName;
 
-    public async Task<Result> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct)
+    public async Task<Result<FileWriteReceipt>> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct)
     {
         if (!string.Equals(target.Scheme, Scheme, StringComparison.OrdinalIgnoreCase))
         {
-            return Result.Failure(Error.Validation.Invalid($"AzureBlobFileSink received non-blob scheme '{target.Scheme}'"));
+            return Result<FileWriteReceipt>.Failure(Error.Validation.Invalid($"AzureBlobFileSink received non-blob scheme '{target.Scheme}'"));
         }
         var destination = _destinations.CurrentValue.AzureBlob
             .FirstOrDefault(d => string.Equals(d.Name, target.SourceName, StringComparison.OrdinalIgnoreCase));
         if (destination is null)
         {
-            return Result.Failure(Error.Storage.NotConfigured(target.SourceName ?? "<unknown>"));
+            return Result<FileWriteReceipt>.Failure(Error.Storage.NotConfigured(target.SourceName ?? "<unknown>"));
         }
 
         var blobPath = ComposeBlobPath(destination.RootPathPrefix, target.Path);
@@ -69,7 +69,7 @@ public sealed class AzureBlobFileSink(
         if (upload.IsFailure)
         {
             activity?.SetStatus(ActivityStatusCode.Error, upload.Error.Code);
-            return Result.Failure(upload.Error);
+            return Result<FileWriteReceipt>.Failure(upload.Error);
         }
         var result = upload.Value!;
         activity?.SetTag("blob.account", result.AccountName);
@@ -77,7 +77,7 @@ public sealed class AzureBlobFileSink(
         TelemetryInstrumentation.BytesCopied.Add(result.BytesWritten);
         _logger.LogInformation("Wrote blob {BlobUri} ({Bytes} bytes) for destination {Destination}",
             result.BlobUri, result.BytesWritten, destination.Name);
-        return Result.Success();
+        return Result<FileWriteReceipt>.Success(new FileWriteReceipt(result.BytesWritten, result.BlobUri, contentType));
     }
 
     private string? ResolveContentType(AzureBlobDestinationOptions destination, string blobPath) =>

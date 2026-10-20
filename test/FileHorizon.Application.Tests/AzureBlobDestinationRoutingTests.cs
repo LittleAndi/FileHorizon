@@ -65,10 +65,10 @@ public class AzureBlobDestinationRoutingTests
     {
         public FileReference? LastTarget { get; private set; }
         public string Name => AzureBlobFileSink.SinkName;
-        public Task<Result> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct)
+        public Task<Result<FileWriteReceipt>> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct)
         {
             LastTarget = target;
-            return Task.FromResult(Result.Success());
+            return Task.FromResult(Result<FileWriteReceipt>.Success(new FileWriteReceipt(0)));
         }
     }
 

@@ -12,13 +12,13 @@ public sealed class LocalFileSink(ILogger<LocalFileSink> logger) : IFileSink
     private readonly ILogger<LocalFileSink> _logger = logger;
     public string Name => "Local";
 
-    public async Task<Result> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct)
+    public async Task<Result<FileWriteReceipt>> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct)
     {
         try
         {
             if (!string.Equals(target.Scheme, "local", StringComparison.OrdinalIgnoreCase))
             {
-                return Result.Failure(Error.Validation.Invalid($"LocalFileSink received non-local scheme '{target.Scheme}'"));
+                return Result<FileWriteReceipt>.Failure(Error.Validation.Invalid($"LocalFileSink received non-local scheme '{target.Scheme}'"));
             }
 
             var destPath = target.Path;
@@ -44,17 +44,18 @@ public sealed class LocalFileSink(ILogger<LocalFileSink> logger) : IFileSink
                 total += read;
             }
             TelemetryInstrumentation.BytesCopied.Add(total);
-            return Result.Success();
+            var location = Uri.TryCreate(destPath, UriKind.Absolute, out var uri) ? uri : null;
+            return Result<FileWriteReceipt>.Success(new FileWriteReceipt(total, location));
         }
         catch (IOException ioEx) when (ioEx is not null)
         {
             _logger.LogError(ioEx, "I/O error writing to {Path}", target.Path);
-            return Result.Failure(Error.Unspecified("LocalSink.IO", ioEx.Message));
+            return Result<FileWriteReceipt>.Failure(Error.Unspecified("LocalSink.IO", ioEx.Message));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error writing to {Path}", target.Path);
-            return Result.Failure(Error.Unspecified("LocalSink.Unexpected", ex.Message));
+            return Result<FileWriteReceipt>.Failure(Error.Unspecified("LocalSink.Unexpected", ex.Message));
         }
     }
 }

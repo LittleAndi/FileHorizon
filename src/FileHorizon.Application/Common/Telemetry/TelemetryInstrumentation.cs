@@ -12,7 +12,7 @@ public static class TelemetryInstrumentation
     public static readonly Meter Meter = new(MeterName, version: "1.0.0");
 
     // Counters
-    public static readonly Counter<long> FilesProcessed = Meter.CreateCounter<long>("files.processed", description: "Number of files successfully processed");
+    public static readonly Counter<long> FilesProcessed = Meter.CreateCounter<long>("files.processed", description: "Number of files successfully transferred to a destination; skipped files are not counted");
     public static readonly Counter<long> FilesFailed = Meter.CreateCounter<long>("files.failed", description: "Number of files that failed processing");
     public static readonly Counter<long> BytesCopied = Meter.CreateCounter<long>("bytes.copied", unit: "bytes", description: "Total bytes copied by sinks");
     public static readonly Counter<long> QueueEnqueued = Meter.CreateCounter<long>("queue.enqueued", description: "Number of file events enqueued");
@@ -23,6 +23,7 @@ public static class TelemetryInstrumentation
     public static readonly Counter<long> PollSourceErrors = Meter.CreateCounter<long>("poll.source.errors", description: "Number of source-level poll errors");
     public static readonly Counter<long> FilesDiscovered = Meter.CreateCounter<long>("files.discovered", description: "Number of files discovered by pollers");
     public static readonly Counter<long> FilesSkippedUnstable = Meter.CreateCounter<long>("files.skipped.unstable", description: "Files skipped because not yet stable");
+    public static readonly Counter<long> FilesSkippedIdempotent = Meter.CreateCounter<long>("files.skipped.idempotent", description: "Files skipped because this exact version was already transferred");
 
     // Histograms
     public static readonly Histogram<double> ProcessingDurationMs = Meter.CreateHistogram<double>("processing.duration.ms", unit: "ms", description: "File processing duration in milliseconds");

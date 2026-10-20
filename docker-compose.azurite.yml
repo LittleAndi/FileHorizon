@@ -73,7 +73,6 @@ services:
       # Single process: poll + transfer in one, in-memory queue (no Redis)
       - Pipeline__Role=All
       - Redis__Enabled=false
-      - Features__EnableFileTransfer=true
       - Features__EnableLocalPoller=false
       - Features__EnableFtpPoller=false
       - Features__EnableSftpPoller=true

@@ -3,6 +3,7 @@
 #   BUILD_CONFIGURATION=Release
 #   UID=1001
 #   GID=1001
+#   VERSION=      (optional; .git is not in the build context, so MinVer cannot read tags here)
 
 ARG BUILD_CONFIGURATION=Release
 ARG UID=1001
@@ -13,10 +14,12 @@ ARG GID=1001
 ############################
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 ARG BUILD_CONFIGURATION=Release
+ARG VERSION=
 WORKDIR /src
 
 # Copy solution and project files first to leverage layer caching
 COPY FileHorizon.sln ./
+COPY src/Directory.Build.props src/
 COPY src/FileHorizon.Application/FileHorizon.Application.csproj src/FileHorizon.Application/
 COPY src/FileHorizon.Host/FileHorizon.Host.csproj src/FileHorizon.Host/
 COPY test/FileHorizon.Application.Tests/FileHorizon.Application.Tests.csproj test/FileHorizon.Application.Tests/
@@ -32,7 +35,8 @@ RUN dotnet publish src/FileHorizon.Host/FileHorizon.Host.csproj \
     -c ${BUILD_CONFIGURATION} \
     -o /app/publish \
     --no-restore \
-    --nologo
+    --nologo \
+    -p:MinVerVersionOverride=${VERSION}
 
 ############################
 ## Runtime Stage (ASP.NET Core runtime image)

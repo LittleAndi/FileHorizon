@@ -34,7 +34,7 @@ public interface IFileContentReader // source adapter
 public interface IFileSink // destination adapter
 {
     string Name { get; }
-    Task<Result> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct);
+    Task<Result<FileWriteReceipt>> WriteAsync(FileReference target, Stream content, FileWriteOptions options, CancellationToken ct);
 }
 
 public interface IFileRouter
@@ -138,13 +138,21 @@ Planned / not yet emitted:
 
 Implemented metrics (see `TelemetryInstrumentation`):
 
-- `files.processed`
+- `files.processed`: files transferred to a destination. Skipped files are not counted (see below).
 - `files.failed`
 - `bytes.copied`
-- `processing.duration.ms` (histogram)
+- `processing.duration.ms` (histogram): recorded for transfers and failures, not for skipped files.
 - `poll.cycles`, `poll.cycle.duration.ms`
 - `files.discovered`, `files.skipped.unstable`
+- `files.skipped.idempotent` (orchestrator skipped a file version already transferred; tagged `file.protocol`)
 - Queue metrics: `queue.enqueued`, `queue.dequeued`, `queue.enqueue.failures`, `queue.dequeue.failures`
+
+A file is *skipped* when the orchestrator returns `Result.Skipped()` instead of transferring it. That happens in two cases:
+
+- **Idempotent skip:** the exact file version (path, size, mtime) is already in the idempotency store. This is common after a restart, because the pollers' in-memory dedup is lost and retained files are re-enqueued, and in multi-instance deployments.
+- **No destination plan:** the router returned success with no plans. The built-in `SimpleFileRouter` returns a failure when no rule matches, so that case counts in `files.failed`; the empty-plan skip only applies to custom routers.
+
+`FileProcessingService` records neither `files.processed` nor `processing.duration.ms` for a skip, so a large retained backlog after a restart does not inflate either metric. The `file.process` span still completes with status Ok, and the `file.orchestrate` span carries `file.skipped` set to `idempotent` or `no_route`. Idempotent skips are counted separately in `files.skipped.idempotent`.
 
 Not yet implemented (previously listed aspirationally):
 
@@ -190,8 +198,8 @@ These remain in the roadmap and will be added once multi-destination routing is 
 
 ## Backward compatibility & rollout
 
-- Feature flags gate new behavior (`EnableFileTransfer`, destination/sink enablement flags if needed).
-- Can run orchestrator in shadow mode (read & route only) while still executing the legacy local processor, to verify route decisions via telemetry before switching.
+- Feature flags gate new behavior (destination/sink enablement flags if needed). There is no transfer on/off switch; an opt-in dry-run mode may be added later.
+- (Not implemented; a possible future dry-run mode) Could run orchestrator in shadow mode (read & route only) while still executing the legacy local processor, to verify route decisions via telemetry before switching.
 
 ## Open questions (carried forward)
 

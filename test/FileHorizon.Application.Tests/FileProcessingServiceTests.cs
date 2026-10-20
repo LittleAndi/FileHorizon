@@ -51,4 +51,28 @@ public class FileProcessingServiceTests
         Assert.Equal(1, testProcessor.CallCount);
         Assert.Equal(1, telemetry.Success);
     }
+
+    [Fact]
+    public async Task HandleAsync_SkippedResult_DoesNotRecordSuccessOrDuration()
+    {
+        var fileEvent = new FileEvent(
+            Id: Guid.NewGuid().ToString(),
+            Metadata: new FileMetadata("/tmp/a.txt", 123, DateTimeOffset.UtcNow, "sha256", null),
+            DiscoveredAtUtc: DateTimeOffset.UtcNow,
+            Protocol: "local",
+            DestinationPath: "/dest/a.txt",
+            DeleteAfterTransfer: false);
+
+        var testProcessor = new TestFileProcessor((fe, ct) => Task.FromResult(Result.Skipped()));
+        var telemetry = new FakeTelemetry();
+        var svc = new FileProcessingService(testProcessor, NullLogger<FileProcessingService>.Instance, telemetry);
+
+        var result = await svc.HandleAsync(fileEvent, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.IsSkipped);
+        Assert.Equal(0, telemetry.Success);
+        Assert.Equal(0, telemetry.Failure);
+        Assert.Empty(telemetry.Durations);
+    }
 }

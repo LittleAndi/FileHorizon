@@ -33,6 +33,85 @@ public class AzureBlobDestinationValidatorTests
         Assert.True(result.Succeeded);
     }
 
+    private static DestinationsOptions ClaimCheckOptions(
+        string target = "sb-dest",
+        Action<ServiceBusDestinationOptions>? configureServiceBus = null,
+        Action<AzureBlobDestinationOptions>? configureBlob = null)
+    {
+        var sb = new ServiceBusDestinationOptions
+        {
+            Name = "sb-dest",
+            EntityName = "queue",
+            ServiceBusTechnical = new ServiceBusTechnicalOptions { ConnectionString = "Endpoint=sb://fake/" }
+        };
+        configureServiceBus?.Invoke(sb);
+        var options = Options(d =>
+        {
+            d.ClaimCheck = new BlobClaimCheckOptions { ServiceBusDestination = target };
+            d.OverwritePolicy = BlobOverwritePolicy.Overwrite;
+            configureBlob?.Invoke(d);
+        });
+        options.ServiceBus = [sb];
+        return options;
+    }
+
+    [Fact]
+    public void Validate_ClaimCheck_ReferencingKnownServiceBusDestination_Succeeds()
+    {
+        var result = _validator.Validate(null, ClaimCheckOptions());
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void Validate_ClaimCheck_WithoutServiceBusDestination_Fails()
+    {
+        var result = _validator.Validate(null, ClaimCheckOptions(target: ""));
+        Assert.False(result.Succeeded);
+        Assert.Contains("ClaimCheck.ServiceBusDestination must be specified", result.FailureMessage);
+    }
+
+    [Fact]
+    public void Validate_ClaimCheck_ReferencingUnknownServiceBusDestination_Fails()
+    {
+        var result = _validator.Validate(null, ClaimCheckOptions(target: "nope"));
+        Assert.False(result.Succeeded);
+        Assert.Contains("does not match any Destinations:ServiceBus entry", result.FailureMessage);
+    }
+
+    [Fact]
+    public void Validate_ClaimCheck_OnGzipCompressedDestination_Fails()
+    {
+        var result = _validator.Validate(null, ClaimCheckOptions(configureServiceBus: d => d.EnableGzipCompression = true));
+        Assert.False(result.Succeeded);
+        Assert.Contains("EnableGzipCompression", result.FailureMessage);
+    }
+
+    [Fact]
+    public void Validate_ClaimCheck_WithDefaultOverwritePolicy_Fails()
+    {
+        var result = _validator.Validate(null, ClaimCheckOptions(configureBlob: d => d.OverwritePolicy = null));
+        Assert.False(result.Succeeded);
+        Assert.Contains("ClaimCheck requires OverwritePolicy: Overwrite", result.FailureMessage);
+    }
+
+    [Fact]
+    public void Validate_ClaimCheck_WithFailIfExistsOverwritePolicy_Fails()
+    {
+        var result = _validator.Validate(null, ClaimCheckOptions(configureBlob: d => d.OverwritePolicy = BlobOverwritePolicy.FailIfExists));
+        Assert.False(result.Succeeded);
+        Assert.Contains("ClaimCheck requires OverwritePolicy: Overwrite", result.FailureMessage);
+    }
+
+    [Fact]
+    public void Validate_ServiceBus_ClaimCheckApplicationProperty_IsReserved()
+    {
+        var options = ClaimCheckOptions(configureServiceBus: d =>
+            d.ApplicationProperties = new Dictionary<string, string> { ["claimCheck"] = "false" });
+        var result = _validator.Validate(null, options);
+        Assert.False(result.Succeeded);
+        Assert.Contains("is reserved and cannot be configured", result.FailureMessage);
+    }
+
     [Fact]
     public void Validate_MissingName_Fails()
     {

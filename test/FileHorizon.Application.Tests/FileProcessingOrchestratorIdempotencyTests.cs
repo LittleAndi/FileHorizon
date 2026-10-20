@@ -1,11 +1,13 @@
 using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Common;
+using FileHorizon.Application.Common.Telemetry;
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Infrastructure.FileProcessing;
 using FileHorizon.Application.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Diagnostics.Metrics;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 
@@ -53,7 +55,7 @@ public class FileProcessingOrchestratorIdempotencyTests : IDisposable
         DestinationPath: string.Empty,
         DeleteAfterTransfer: false);
 
-    private FileProcessingOrchestrator CreateOrchestrator(IIdempotencyStore store, bool enabled = true, bool overwrite = true)
+    private FileProcessingOrchestrator CreateOrchestrator(IIdempotencyStore store, bool enabled = true, bool overwrite = true, IFileRouter? routerOverride = null)
     {
         var routing = new RoutingOptions
         {
@@ -82,7 +84,7 @@ public class FileProcessingOrchestratorIdempotencyTests : IDisposable
         var configuration = new ConfigurationBuilder().AddInMemoryCollection([]).Build();
 
         return new FileProcessingOrchestrator(
-            router: router,
+            router: routerOverride ?? router,
             readers: [new Infrastructure.Processing.LocalFileContentReader(NullLogger<Infrastructure.Processing.LocalFileContentReader>.Instance)],
             sinks: [new Infrastructure.Processing.LocalFileSink(NullLogger<Infrastructure.Processing.LocalFileSink>.Instance)],
             destinations: new StaticOptionsMonitor<DestinationsOptions>(destinations),
@@ -108,6 +110,7 @@ public class FileProcessingOrchestratorIdempotencyTests : IDisposable
 
         var first = await orchestrator.ProcessAsync(NewEvent(), CancellationToken.None);
         Assert.True(first.IsSuccess);
+        Assert.False(first.IsSkipped);
         Assert.True(File.Exists(DestFile));
 
         // Simulate re-discovery after a restart: new GUID, same file identity.
@@ -115,7 +118,49 @@ public class FileProcessingOrchestratorIdempotencyTests : IDisposable
         var second = await orchestrator.ProcessAsync(NewEvent(), CancellationToken.None);
 
         Assert.True(second.IsSuccess);
+        Assert.True(second.IsSkipped); // lets FileProcessingService keep it out of files.processed
         Assert.False(File.Exists(DestFile)); // skipped, nothing written
+    }
+
+    [Fact]
+    public async Task SkippedFile_IncrementsIdempotentSkipCounter()
+    {
+        var store = new Infrastructure.Idempotency.InMemoryIdempotencyStore();
+        var orchestrator = CreateOrchestrator(store);
+
+        // The listener callback runs synchronously on the Add() call, so an AsyncLocal
+        // flag isolates this test's measurements from tests running in parallel.
+        var inThisTest = new AsyncLocal<bool>();
+        var measurements = new List<(long Value, object? Protocol)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == TelemetryInstrumentation.MeterName && instrument.Name == "files.skipped.idempotent")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            if (!inThisTest.Value) return;
+            object? protocol = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "file.protocol") protocol = tag.Value;
+            }
+            lock (measurements) measurements.Add((value, protocol));
+        });
+        listener.Start();
+        inThisTest.Value = true;
+
+        await orchestrator.ProcessAsync(NewEvent(), CancellationToken.None);
+        Assert.Empty(measurements); // first transfer is not a skip
+
+        await orchestrator.ProcessAsync(NewEvent(), CancellationToken.None);
+
+        var skip = Assert.Single(measurements);
+        Assert.Equal(1, skip.Value);
+        Assert.Equal("local", skip.Protocol);
     }
 
     [Fact]
@@ -214,5 +259,23 @@ public class FileProcessingOrchestratorIdempotencyTests : IDisposable
             FileIdentity.BuildIdempotencyKey(ev.Metadata),
             null,
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task NoDestinationPlan_IsSkipped_AndNotMarked()
+    {
+        var store = new Infrastructure.Idempotency.InMemoryIdempotencyStore();
+        var router = Substitute.For<IFileRouter>();
+        router.RouteAsync(Arg.Any<FileEvent>(), Arg.Any<CancellationToken>())
+            .Returns(Result<IReadOnlyList<DestinationPlan>>.Success([]));
+        var orchestrator = CreateOrchestrator(store, routerOverride: router);
+
+        var ev = NewEvent();
+        var result = await orchestrator.ProcessAsync(ev, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.IsSkipped);
+        Assert.False(File.Exists(DestFile));
+        Assert.False(await store.IsProcessedAsync(FileIdentity.BuildIdempotencyKey(ev.Metadata), CancellationToken.None));
     }
 }

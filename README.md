@@ -26,6 +26,7 @@ Optional build args:
 
 - `BUILD_CONFIGURATION` (default `Release`)
 - `UID` / `GID` to align container user with host filesystem permissions
+- `VERSION` to stamp the build version (e.g. `--build-arg VERSION=0.2.0`). `.git` is not part of the build context, so without it the image reports `0.0.0-alpha.0`; see [Versioning](#versioning)
 
 ### Run (example)
 
@@ -55,9 +56,21 @@ Runtime configuration is provided via `appsettings.json` / environment variables
 ```
 docker run --rm -p 8080:8080 \
 	-e "Pipeline__Role=All" \
-	-e "Features__EnableFileTransfer=true" \
 	filehorizon:dev
 ```
+
+### Running Without the HTTP Endpoint
+
+By default FileHorizon serves `/health` and (when Prometheus is enabled) `/metrics` over HTTP. When several instances run directly on one server, outside containers, each one would need its own port, and a second instance with no URL configured fails at startup because the default port is already taken. Nothing in the pipeline needs HTTP, so the endpoint can be switched off:
+
+```
+Http__Enabled=false
+```
+
+With `Http:Enabled=false` (default `true`) FileHorizon runs as a plain worker process and binds no port at all; `ASPNETCORE_URLS` and `urls` are ignored. Polling, transfer, idempotency and telemetry export are unaffected. What you lose:
+
+- `/health` is not served, so use the process supervisor (Windows service, systemd) to watch the process instead.
+- `/metrics` is not served. Export metrics over OTLP instead (see [Enabling OTLP Export](#enabling-otlp-export)). If `Telemetry:EnablePrometheus` is still `true` (the default), a warning is logged at startup; set it to `false` to silence it.
 
 ---
 
@@ -67,12 +80,13 @@ File discovery is handled by protocol-specific pollers composed by a multi-proto
 
 Feature flags (section `Features`):
 
-| Flag                 | Default | Purpose                                                                                           |
-| -------------------- | ------- | ------------------------------------------------------------------------------------------------- |
-| `EnableLocalPoller`  | `true`  | Enable local/UNC directory polling sources configured under `FileSources` (legacy/local).         |
-| `EnableFtpPoller`    | `false` | Enable FTP remote sources listed in `RemoteFileSources:Sources`.                                  |
-| `EnableSftpPoller`   | `false` | Enable SFTP remote sources listed in `RemoteFileSources:Sources`.                                 |
-| `EnableFileTransfer` | `false` | Perform the actual transfer/move (side effects). When `false`, pipeline simulates discovery only. |
+| Flag                | Default | Purpose                                                                                   |
+| ------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `EnableLocalPoller` | `true`  | Enable local/UNC directory polling sources configured under `FileSources` (legacy/local). |
+| `EnableFtpPoller`   | `false` | Enable FTP remote sources listed in `RemoteFileSources:Sources`.                          |
+| `EnableSftpPoller`  | `false` | Enable SFTP remote sources listed in `RemoteFileSources:Sources`.                         |
+
+There is no dry-run switch: any instance whose role processes events (`All` or `Worker`) transfers files for real, and deletes sources configured with `DeleteAfterTransfer: true`. An older `Features:EnableFileTransfer` key was never read and has been removed; if it is still in your configuration it is ignored.
 
 <!-- Orchestrated processor is now the default; no flag required. -->
 
@@ -82,7 +96,6 @@ Environment variable examples:
 Features__EnableLocalPoller=true
 Features__EnableFtpPoller=false
 Features__EnableSftpPoller=true
-Features__EnableFileTransfer=true
 ```
 
 If all three poller flags are disabled the composite poller runs with an empty set (harmless no-op). This is useful for staging environments while only processing already enqueued events.
@@ -124,6 +137,9 @@ Example `appsettings.json` excerpt:
         "HostKeyFingerprints": ["SHA256:...ed25519...", "SHA256:...rsa..."],
         "StrictHostKey": true,
         "MinStableSeconds": 8,
+        "OperationTimeoutSeconds": 60,
+        "KeepAliveIntervalSeconds": 30,
+        "ConnectTimeoutSeconds": 30,
         "Enabled": true
       }
     ]
@@ -151,6 +167,19 @@ Validation rules enforced at startup:
 - `MinStableSeconds` must be >= 0.
 - Every configured host key fingerprint must be a recognised format (see below).
 - `StrictHostKey: true` requires at least one fingerprint, otherwise every connection would be rejected.
+- SFTP `OperationTimeoutSeconds` and `ConnectTimeoutSeconds` must be between 1 and 2147483; `KeepAliveIntervalSeconds` must be between 0 and 2147483. There is no "infinite" setting. These are checked for disabled sources too.
+
+### SFTP Timeouts
+
+Each SFTP source bounds how long it waits on the server. The same values apply to polling and to the download of files from that source.
+
+| Setting | Default | Meaning |
+| ------- | ------- | ------- |
+| `OperationTimeoutSeconds` | 60 | Maximum wait for the response to one SFTP request. A directory listing is made of many requests, so a large listing can take longer than this in total. |
+| `KeepAliveIntervalSeconds` | 30 | Interval between SSH keep-alive messages, which keep idle connections open through NAT and firewalls. `0` disables them. Keep-alives expect no reply, so they do not detect a stalled server; `OperationTimeoutSeconds` does. |
+| `ConnectTimeoutSeconds` | 30 | Maximum wait for the TCP connect and SSH handshake. |
+
+When a request times out (for example on a half-open connection, where the server stops answering without closing the socket) the poll for that source fails with an error log, the source goes into backoff, and the next poll opens a new connection. Other sources keep polling.
 
 ### SFTP Host Key Verification
 
@@ -471,6 +500,7 @@ Options:
 - `AccessTier` (optional): `Hot` | `Cool` | `Cold` | `Archive`; applied per upload.
 - `ContentTypeStrategy`: `InferFromExtension` (default; falls back to `application/octet-stream`), `Provided` (requires `ContentType`), or `None`.
 - `OverwritePolicy`: `FailIfExists` (upload is rejected with `Storage.AlreadyExists` when the blob exists) or `Overwrite`. When omitted, the routing rule's `Overwrite` flag applies.
+- `ClaimCheck` (optional): publish a pointer to the uploaded blob on Service Bus after every successful write. See [Claim-Check](#destinations-claim-check-blob--service-bus-pointer).
 - `BlobTechnical`: authentication and retry settings. Provide `ConnectionString` for shared-key/Azurite scenarios, or `AccountName` (optionally with `ManagedIdentityClientId`) for managed identity via `DefaultAzureCredential`. `ServiceUri` overrides `AccountName` for sovereign clouds or a custom Azurite endpoint. Transient failures (throttling, timeouts, 5xx) are retried by the Azure SDK per `MaxRetries` / `RetryBaseDelayMs` / `RetryMaxDelayMs`.
 
 Local development against Azurite:
@@ -486,6 +516,73 @@ Telemetry:
 - Uploads run inside a `sink.write` activity tagged with `sink.name=AzureBlob`, `blob.container`, `blob.path`, `blob.tier` and `blob.account`.
 - Metrics on the shared `FileHorizon` meter: `blob.upload.bytes`, `blob.upload.duration.ms`, `blob.upload.successes` (tagged with `tier`), and `blob.upload.failures` (tagged with `reason`).
 - Failures are translated to domain errors (`Storage.AlreadyExists`, `Storage.ContainerMissing`, `Storage.Authorization`, `Storage.UploadTransient`, `Storage.UploadError`), never raw exceptions.
+
+### Destinations: Claim-Check (blob + Service Bus pointer)
+
+A blob destination can notify Service Bus once the upload succeeds, sending a pointer to the blob instead of the file bytes. This is the claim-check pattern: the file goes to storage, the message carries only its address, and a consumer that recognises the envelope fetches the blob itself. It keeps arbitrarily large files off a Service Bus namespace whose message ceiling is 256 KB total on Standard.
+
+Add a `ClaimCheck` block naming an existing `Destinations:ServiceBus` entry:
+
+```json
+{
+  "Destinations": {
+    "AzureBlob": [
+      {
+        "Name": "DespatchAdviceInbox",
+        "ContainerName": "inbox",
+        "RootPathPrefix": "despatchadvice",
+        "OverwritePolicy": "Overwrite",
+        "ClaimCheck": {
+          "ServiceBusDestination": "DespatchAdviceQueue"
+        },
+        "BlobTechnical": {
+          "ConnectionString": "..."
+        }
+      }
+    ],
+    "ServiceBus": [
+      {
+        "Name": "DespatchAdviceQueue",
+        "EntityName": "despatchadvice-sbq",
+        "ServiceBusTechnical": {
+          "ConnectionString": "..."
+        }
+      }
+    ]
+  },
+  "Routing": {
+    "Rules": [
+      {
+        "Name": "DespatchAdviceToInbox",
+        "Protocol": "sftp",
+        "PathGlob": "**/*.edi",
+        "Destinations": ["DespatchAdviceInbox"]
+      }
+    ]
+  }
+}
+```
+
+Routing rules still name the blob destination. The Service Bus destination is referenced only by the `ClaimCheck` block, so it does not need a rule of its own.
+
+**The message.** The body is the envelope, and only the envelope:
+
+```json
+{ "blobUrl": "https://acct.blob.core.windows.net/inbox/despatchadvice/order.edi", "contentType": "application/edifact", "length": 51234 }
+```
+
+- `contentType` is the blob's content type, resolved by the blob destination's `ContentTypeStrategy`. The Service Bus message advertises that same content type rather than `application/json`, so a consumer that resolves the pointer ends up with exactly what an inline message would have carried. When the strategy is `None` and no type is resolved, the property is omitted rather than serialized as `null`.
+- The application property `claimCheck` is set to `"true"`. That marker, not the body's shape, is how a consumer tells a pointer from a payload; `claimCheck` is reserved and cannot be set through `ApplicationProperties`.
+- `fh.fileId` and `fh.protocol` are set as on any published message, and any `ApplicationProperties` configured on the Service Bus destination are applied. Keep setting the properties your subscriptions filter on — a claim-checked message that drops them matches no `CorrelationFilter` rule and disappears without an error.
+- A consumer that does not recognise the envelope must fail loudly rather than forward a pointer as if it were a payload.
+
+**No size threshold.** If `ClaimCheck` is configured, every file routed to that destination is claim-checked, whatever its size. A producer and a consumer never have to agree on where a cutoff sits.
+
+**Ordering and failure.** The blob write happens first and the publish only runs if it succeeded, so a pointer never names bytes that are not in the container. A failed publish fails the whole transfer: the file is not marked as processed and will be retried. The blob from the failed attempt stays behind, so a claim-check destination **requires `OverwritePolicy: Overwrite`** — under `FailIfExists` the retry would fail permanently on `Storage.AlreadyExists` and the file would never get through. The Service Bus target is also resolved before the upload, so a config reload that drops it fails the transfer with nothing written rather than orphaning a blob.
+
+Validation rejects a `ClaimCheck` that names a Service Bus destination which does not exist, one with `EnableGzipCompression` enabled (gzipping a ~100-byte pointer only forces consumers to decompress before they can read a URL), or a blob destination left at `OverwritePolicy: FailIfExists` (or its default).
+
+Telemetry: the publish runs inside a `claimcheck.publish` activity tagged with `messaging.destination`, `blob.destination`, `blob.uri` and `messaging.content_type`, and increments the same `servicebus.publish.*` metrics as an inline publish.
 
 ---
 
@@ -685,15 +782,13 @@ The compose file sets sensible defaults:
 - `FileSources__Sources__0__*` defines the first file source (InboxA). Add more sources incrementally:
   - `FileSources__Sources__1__Name=InboxB`
   - `FileSources__Sources__1__Path=/data/inboxB`
-- Change `Features__EnableFileTransfer` to `true` to perform actual file transfers once implemented.
-  Pipeline orchestration now uses `Pipeline__Role` to determine which background services run (see section below). `Features__EnableFileTransfer` only controls whether real file movement occurs.
+- `Pipeline__Role` determines which background services run (see section below). Any role that processes events (`All`, `Worker`) performs real transfers.
 
 You can override any value using an `.env` file placed next to `docker-compose.yml`:
 
 ```
 # .env example
 PIPELINE__ROLE=All
-FEATURES__ENABLEFILETRANSFER=false
 REDIS__ENABLED=true
 POLLING__INTERVALMILLISECONDS=500
 ```
@@ -727,11 +822,9 @@ Example: one poller + multiple workers
 ```
 # poller (enqueue only, no processing)
 Pipeline__Role=Poller
-Features__EnableFileTransfer=false
 
 # worker (process only)
 Pipeline__Role=Worker
-Features__EnableFileTransfer=true
 ```
 
 Alternatively (common simpler pattern):
@@ -739,11 +832,9 @@ Alternatively (common simpler pattern):
 ```
 # single poller that also processes
 Pipeline__Role=All
-Features__EnableFileTransfer=true
 
 # additional workers (no polling - processing only)
 Pipeline__Role=Worker
-Features__EnableFileTransfer=true
 ```
 
 > Reminder (WSL + containerd): If you previously built with `docker build`, rebuild with `nerdctl build` to ensure the image exists in the containerd image store before scaling.
@@ -793,19 +884,19 @@ FileHorizon ships with unified tracing, metrics, and structured logging via **Op
 
 - Traces: file processing spans (`file.process`, `file.orchestrate`), reader/sink spans (`reader.open`, `sink.write`), queue enqueue/dequeue spans (`queue.enqueue`, `queue.dequeue`), lifecycle span (`pipeline.lifetime`).
 - Metrics (Meter `FileHorizon`):
-  - `files.processed` (counter)
+  - `files.processed` (counter; transfers only, skipped files excluded)
   - `files.failed` (counter)
   - `bytes.copied` (counter)
   - `queue.enqueued` (counter)
   - `queue.enqueue.failures` (counter)
   - `queue.dequeued` (counter)
   - `queue.dequeue.failures` (counter)
-  - `processing.duration.ms` (histogram)
+  - `processing.duration.ms` (histogram; skipped files excluded)
   - `poll.cycle.duration.ms` (histogram)
 
 ### Prometheus Endpoint
 
-If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus scrape format. Health remains at `/health`.
+If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus scrape format. Health remains at `/health`. Both require the HTTP endpoint; with `Http:Enabled=false` (see [Running Without the HTTP Endpoint](#running-without-the-http-endpoint)) neither is served and metrics should go out over OTLP.
 
 ### Configuration
 
@@ -816,14 +907,14 @@ If enabled (default), metrics are exposed at `GET /metrics` using the Prometheus
 | `EnableTracing`         | true                   | Enable Activity/trace pipeline                                 |
 | `EnableMetrics`         | true                   | Enable metrics collection                                      |
 | `EnableLogging`         | true                   | Route structured logs through OTEL exporter                    |
-| `EnablePrometheus`      | true                   | Expose `/metrics` endpoint                                     |
+| `EnablePrometheus`      | true                   | Expose `/metrics` endpoint (requires `Http:Enabled=true`)      |
 | `EnableOtlpExporter`    | false                  | Enable OTLP exporter for traces/metrics/logs                   |
 | `OtlpEndpoint`          | null                   | OTLP endpoint (e.g. `http://otel-collector:4317` for gRPC)     |
 | `OtlpProtocol`          | Grpc                   | Wire protocol: `Grpc` (port 4317) or `HttpProtobuf` (port 4318)|
 | `OtlpHeaders`           | null                   | Additional OTLP headers, comma separated (key=value,key2=value2) |
 | `TracesSampleRatio`     | null                   | null = sample all; `0..1` = parent-based ratio sampler         |
 | `ServiceName`           | FileHorizon            | Override service.name resource attribute                       |
-| `ServiceVersion`        | Assembly version       | Override service.version                                       |
+| `ServiceVersion`        | Build version          | Override service.version (see [Versioning](#versioning))       |
 | `DeploymentEnvironment` | ASPNETCORE_ENVIRONMENT | Adds `deployment.environment` attribute                        |
 
 Environment variable mapping uses double underscores, e.g.:
@@ -833,6 +924,18 @@ Telemetry__EnableOtlpExporter=true
 Telemetry__OtlpEndpoint=http://otel-collector:4317
 Telemetry__DeploymentEnvironment=dev
 ```
+
+### Versioning
+
+The build version comes from git tags via [MinVer](https://github.com/adamralph/minver) (configured in `src/Directory.Build.props`):
+
+| Commit                    | Version reported in `service.version`      |
+| ------------------------- | ------------------------------------------ |
+| Tagged `v0.2.0`           | `0.2.0+<commit sha>`                       |
+| 3 commits after `v0.2.0`  | `0.2.1-alpha.0.3+<commit sha>`             |
+| No tag in history         | `0.0.0-alpha.0.<height>+<commit sha>`      |
+
+A release is cut by tagging `main` (`git tag v0.2.0 && git push upstream v0.2.0`). Builds need the full git history to see tags (CI checks out with `fetch-depth: 0`). Where there is no `.git` directory, such as the Docker build context, pass the version explicitly: `dotnet publish -p:MinVerVersionOverride=0.2.0` or `docker build --build-arg VERSION=0.2.0`. `Telemetry:ServiceVersion` still overrides the reported value at runtime.
 
 ### Enabling OTLP Export
 
@@ -895,6 +998,37 @@ Logs go through the OpenTelemetry logging provider. When the OTLP exporter is en
 (`EnableOtlpExporter=true` with an endpoint) log records are exported to the collector over
 OTLP using the same endpoint/protocol/headers as traces and metrics. Without OTLP enabled
 they remain local (console, in Development or when `LOG_CONSOLE_DEV=true`).
+
+#### File logging
+
+A rolling file provider (`NReco.Logging.File`) is available alongside the console and OTLP
+providers. It is opt-in: nothing is written unless `Logging:File:Path` is configured.
+
+```json
+"Logging": {
+  "LogLevel": { "Default": "Information", "FileHorizon": "Debug" },
+  "File": {
+    "Path": "_data/logs/filehorizon.log",
+    "Append": true,
+    "FileSizeLimitBytes": 10485760,
+    "MaxRollingFiles": 10,
+    "MinLevel": "Debug"
+  }
+}
+```
+
+| Key                  | Default | Description                                                        |
+| -------------------- | ------- | ------------------------------------------------------------------ |
+| `Path`               | (unset) | Log file path; **file logging stays off while this is empty**       |
+| `Append`             | true    | Append to an existing file instead of truncating on start          |
+| `FileSizeLimitBytes` | 0 (off) | Roll to a new file once this size is exceeded                      |
+| `MaxRollingFiles`    | 0 (all) | Number of rolled files to keep (`filehorizon1.log`, `…2.log`, …)   |
+| `MinLevel`           | (unset) | Minimum level for this provider only                               |
+
+Relative paths resolve against the process working directory. In containers, point `Path` at a
+mounted volume (e.g. `/data/logs/filehorizon.log`) so logs outlive the container. Level filters
+under `Logging:LogLevel` apply to every provider; `Logging:File:LogLevel` narrows the file
+provider alone.
 
 ### Tag / Attribute Conventions (Initial)
 
@@ -971,4 +1105,4 @@ Pipeline__Role=Poller
 Pipeline__Role=Worker
 ```
 
-`Pipeline__Role` fully determines polling vs processing. The only remaining feature flag in this area is `Features__EnableFileTransfer` which toggles actual file copy/move side effects.
+`Pipeline__Role` fully determines polling vs processing. There is no separate switch for transfer side effects: every processing role copies files and (when configured) deletes the source.

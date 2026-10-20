@@ -1,0 +1,14 @@
+<Project>
+  <!--
+    Versioning for the shipped projects: MinVer derives the version from the nearest git tag
+    (v0.1.0 -> 0.1.0; commits after a tag -> next patch pre-release, e.g. 0.1.1-alpha.0.3).
+    The informational version also carries the commit SHA, which is what service.version reports.
+    Builds without git history (e.g. the Docker context) can pass -p:MinVerVersionOverride=<version>.
+  -->
+  <PropertyGroup>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MinVer" Version="8.0.0" PrivateAssets="all" />
+  </ItemGroup>
+</Project>
