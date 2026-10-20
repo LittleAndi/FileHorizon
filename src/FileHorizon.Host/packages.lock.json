@@ -10,9 +10,9 @@
       },
       "NReco.Logging.File": {
         "type": "Direct",
-        "requested": "[1.3.1, )",
-        "resolved": "1.3.1",
-        "contentHash": "4aFUEW1OFJsuKtg46dnqxZUyb37f9dzaWOXjUv2x/wzoHKovR9yqiMzXtCZt3+a9G78YCIAtSEz2g/GaNYbxSQ==",
+        "requested": "[1.4.0, )",
+        "resolved": "1.4.0",
+        "contentHash": "CwL4LVI2DFynoWCgtegbR1jvPVFnJ0LiQmiqGMPJlHWrL4ooMdB6E2JLjcciPEMydQMOhNdwhh6xSjzYPxoZpQ==",
         "dependencies": {
           "Microsoft.Extensions.Logging": "8.0.1",
           "Microsoft.Extensions.Logging.Configuration": "8.0.1",
@@ -233,8 +233,8 @@
       },
       "Microsoft.Extensions.FileSystemGlobbing": {
         "type": "Transitive",
-        "resolved": "10.0.9",
-        "contentHash": "mvRf9qOH/LslWIee/h+lsElnoUyKotEwoPL31soqScmO/eoxObaTCLCdx2DdqPdRi9LnB+7qKZ49jfyrLZuc+w=="
+        "resolved": "10.0.13",
+        "contentHash": "vQVzmAbnzlhXSXA2caYnlxtG9GXxEwtj5bODiWLu06A6iqeJmfBtlfKjuOSJGRy0/CFaNUrm7u9nxEUlljc2Rg=="
       },
       "Microsoft.Extensions.Hosting.Abstractions": {
         "type": "Transitive",
@@ -458,7 +458,7 @@
           "Azure.Messaging.ServiceBus": "[7.21.0, )",
           "Azure.Storage.Blobs": "[12.30.1, )",
           "FluentFTP": "[54.2.0, )",
-          "Microsoft.Extensions.FileSystemGlobbing": "[10.0.9, )",
+          "Microsoft.Extensions.FileSystemGlobbing": "[10.0.13, )",
           "SSH.NET": "[2026.0.0, )",
           "StackExchange.Redis": "[2.13.17, )"
         }
