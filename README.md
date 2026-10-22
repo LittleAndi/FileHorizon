@@ -944,7 +944,7 @@ everything to Elasticsearch). Providers are flushed on graceful shutdown by the
 `OpenTelemetry.Extensions.Hosting` integration.
 
 A plaintext (no TLS) `http://` endpoint works out of the box for both protocols — on
-.NET 8 the runtime supports HTTP/2 cleartext (h2c) for gRPC without any opt-in switch.
+.NET 8 and later the runtime supports HTTP/2 cleartext (h2c) for gRPC without any opt-in switch.
 
 ### Docker Compose Example (Prometheus + Collector)
 

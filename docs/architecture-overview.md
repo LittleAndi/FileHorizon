@@ -11,7 +11,7 @@ lastUpdated: 2025-10-04
 
 ## 1. Executive Summary
 
-FileHorizon is a modular .NET 8 file ingestion and transfer pipeline. It polls heterogeneous sources (local directories, remote protocols) and delivers files to configured destinations with routing, idempotent processing and rich observability (OpenTelemetry metrics & traces). The solution is structured to evolve toward a clean _Ports & Adapters_ (Hexagonal) architecture and vertical slice feature model.
+FileHorizon is a modular .NET 10 file ingestion and transfer pipeline. It polls heterogeneous sources (local directories, remote protocols) and delivers files to configured destinations with routing, idempotent processing and rich observability (OpenTelemetry metrics & traces). The solution is structured to evolve toward a clean _Ports & Adapters_ (Hexagonal) architecture and vertical slice feature model.
 
 Key characteristics:
 
