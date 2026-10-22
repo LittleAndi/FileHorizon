@@ -12,7 +12,7 @@ ARG GID=1001
 ############################
 ## Build Stage
 ############################
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 ARG VERSION=
 WORKDIR /src
@@ -41,7 +41,7 @@ RUN dotnet publish src/FileHorizon.Host/FileHorizon.Host.csproj \
 ############################
 ## Runtime Stage (ASP.NET Core runtime image)
 ############################
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 
 ENV ASPNETCORE_URLS=http://0.0.0.0:8080 \
     DOTNET_EnableDiagnostics=0
