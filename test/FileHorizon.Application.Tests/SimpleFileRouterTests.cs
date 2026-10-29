@@ -1,6 +1,8 @@
 using FileHorizon.Application.Configuration;
 using FileHorizon.Application.Infrastructure.Processing;
 using FileHorizon.Application.Models;
+using FileHorizon.Application.Tests.TestSupport;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -53,6 +55,27 @@ public class SimpleFileRouterTests
         Assert.Equal("OutboxA", plan.DestinationName);
         Assert.Contains("-file.csv", plan.TargetPath);
         Assert.True(plan.Options.Overwrite);
+    }
+
+    [Fact]
+    public async Task RouteAsync_Match_LogsRuleWithFileIdAndPath()
+    {
+        var logger = new CapturingLogger<SimpleFileRouter>();
+        var router = new SimpleFileRouter(
+            routingOptions: Options(new RoutingRuleOptions { Name = "ordrsp", PathGlob = "**/ORDRSP/*.xml", Destinations = ["OrdersBus"] }),
+            destinationsOptions: new StaticOptionsMonitor<DestinationsOptions>(new DestinationsOptions()),
+            logger: logger
+        );
+        var ev = MakeEvent("sftp", "sftp://host:22/partners/acme/ORDRSP/1.xml");
+
+        await router.RouteAsync(ev, CancellationToken.None);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Information, entry.Level);
+        Assert.Equal("ordrsp", entry.State["Rule"]);
+        Assert.Equal("OrdersBus", entry.State["Destination"]);
+        Assert.Equal(ev.Id, entry.State["FileId"]);
+        Assert.Equal("sftp://host:22/partners/acme/ORDRSP/1.xml", entry.State["Path"]);
     }
 }
 

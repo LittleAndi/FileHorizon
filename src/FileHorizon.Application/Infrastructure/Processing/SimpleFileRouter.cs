@@ -50,7 +50,10 @@ public sealed class SimpleFileRouter(
                 ComputeHash: false);
 
             var plan = new DestinationPlan(destinationName, targetName, writeOptions, kind, isTopic);
-            _logger.LogDebug("Router matched rule {Rule} -> {Destination}", rule.Name, destinationName);
+            // Information, and carrying FileId/Path, so one log document links a source file to its rule
+            // without joining on TraceId (#68).
+            _logger.LogInformation("Router matched rule {Rule} -> {Destination} for file {FileId} path={Path}",
+                rule.Name, destinationName, fileEvent.Id, fileEvent.Metadata.SourcePath);
             return Task.FromResult(Result<IReadOnlyList<DestinationPlan>>.Success([plan]));
         }
 
@@ -59,12 +62,19 @@ public sealed class SimpleFileRouter(
     }
 
     private DestinationKind ResolveKind(string destinationName)
+        => FindDestinationKind(_destinationsOptions.CurrentValue, destinationName) ?? DestinationKind.Local; // default fallback
+
+    /// <summary>
+    /// The kind of the configured destination with this name, or null when no destination has it. Shared
+    /// with the startup configuration announcement so both report the same resolution.
+    /// </summary>
+    internal static DestinationKind? FindDestinationKind(DestinationsOptions destinations, string destinationName)
     {
-        if (_destinationsOptions.CurrentValue.Local.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.Local;
-        if (_destinationsOptions.CurrentValue.Sftp.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.Sftp;
-        if (_destinationsOptions.CurrentValue.ServiceBus.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.ServiceBus;
-        if (_destinationsOptions.CurrentValue.AzureBlob.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.AzureBlob;
-        return DestinationKind.Local; // default fallback
+        if (destinations.Local.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.Local;
+        if (destinations.Sftp.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.Sftp;
+        if (destinations.ServiceBus.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.ServiceBus;
+        if (destinations.AzureBlob.Any(l => string.Equals(l.Name, destinationName, StringComparison.OrdinalIgnoreCase))) return DestinationKind.AzureBlob;
+        return null;
     }
 
     private static bool Matches(RoutingRuleOptions r, FileEvent ev)
