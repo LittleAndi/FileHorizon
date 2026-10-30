@@ -1007,6 +1007,31 @@ mounted volume (e.g. `/data/logs/filehorizon.log`) so logs outlive the container
 under `Logging:LogLevel` apply to every provider; `Logging:File:LogLevel` narrows the file
 provider alone.
 
+#### Configuration announcement
+
+At startup, and again when the configuration is reloaded, FileHorizon logs one `Information` event
+per enabled source and one per routing rule. Log consumers can then see what an instance polls and
+how it routes without reading its config:
+
+```
+Source configured {Source} protocol={Protocol} root={Root} pattern={Pattern} recursive={Recursive}
+Rule configured {Rule} order={Order} protocol={Protocol} glob={PathGlob} regex={PathRegex} source={SourceName} -> {Destination} kind={Kind} entity={Entity}
+```
+
+- `root` uses the same form as file paths in other log events (`sftp://host:port/path` for remote sources).
+- `order` is the rule's position. The router uses the first rule that matches.
+- `entity` is where the destination writes: the Service Bus queue or topic, the blob container (plus
+  prefix), or the root path. The events carry no credentials or secret references.
+- Sources are announced only when `Pipeline:Role` polls (`All`, `Poller`), and rules only when it
+  routes (`All`, `Worker`).
+
+Warnings flag a rule that routes to a destination name that isn't configured (the router treats it as
+`Local`), a rule that lists more than one destination (only the first is used), a rule that sets
+`SourceName` (not enforced yet), and an empty rule list.
+
+Each routed file also logs `Router matched rule {Rule} -> {Destination} for file {FileId} path={Path}`
+at `Information`, so a single event links a source file to its rule.
+
 ### Tag / Attribute Conventions (Initial)
 
 | Span                    | Key                             | Example                   |
