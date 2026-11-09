@@ -207,6 +207,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Infrastructure.Orchestration.FilePollingBackgroundService>();
         services.AddSingleton<Infrastructure.Orchestration.FileProcessingBackgroundService>();
 
+        // Registered before the pipeline so the configuration is announced before the first poll or route.
+        services.AddSingleton<Infrastructure.Telemetry.ConfigurationAnnouncer>();
+        services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<Infrastructure.Telemetry.ConfigurationAnnouncer>());
+
         // Composite hosted service decides at runtime which underlying services to start.
         services.AddSingleton<IHostedService>(sp =>
         {
