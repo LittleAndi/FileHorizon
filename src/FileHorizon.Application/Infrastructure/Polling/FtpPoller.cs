@@ -46,6 +46,7 @@ public sealed class FtpPoller(IFileEventQueue queue,
     {
         public FtpSourceOptions Options { get; } = options;
         public string Name => Options.Name;
+        public ProtocolType Protocol => ProtocolType.Ftp;
         public string RemotePath => Options.RemotePath;
         public string Pattern => Options.Pattern;
         public bool Recursive => Options.Recursive;

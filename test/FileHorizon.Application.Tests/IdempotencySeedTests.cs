@@ -305,6 +305,7 @@ public class IdempotencySeedTests
         private sealed class Src(SftpSourceOptions o) : IRemoteFileSourceDescriptor
         {
             public string Name => o.Name;
+            public ProtocolType Protocol => ProtocolType.Sftp;
             public string RemotePath => o.RemotePath;
             public string Pattern => o.Pattern;
             public bool Recursive => o.Recursive;
