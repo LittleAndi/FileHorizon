@@ -239,6 +239,9 @@ public class IdempotencySeedTests
             }
         }
 
+        public IAsyncEnumerable<IRemoteFileInfo> ListTreeAsync(string path, bool recursive, string pattern, CancellationToken ct)
+            => ListFilesAsync(path, recursive, pattern, ct); // directories already pass through
+
         private static bool Matches(string name, string pattern)
         {
             if (pattern is "*" or "*.*") return true;

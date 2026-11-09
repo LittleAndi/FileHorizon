@@ -12,7 +12,7 @@ namespace FileHorizon.Application.Infrastructure.Polling;
 /// Polls configured local directories for files matching patterns and enqueues new file events.
 /// Simple, non-recursive change detection using last seen snapshot; future improvements may use FS watchers.
 /// </summary>
-public sealed class LocalDirectoryPoller : IFilePoller
+public sealed class LocalDirectoryPoller : IFilePoller, ISourceFolderLister
 {
     private readonly IFileEventQueue _queue;
     private readonly ILogger<LocalDirectoryPoller> _logger;
@@ -48,6 +48,53 @@ public sealed class LocalDirectoryPoller : IFilePoller
         }
 
         return Result.Success();
+    }
+
+    /// <summary>
+    /// Lists each source's folders for the route inventory: the root, plus (for a recursive source) every
+    /// folder below it that holds files matching the pattern or has no subfolders.
+    /// </summary>
+    public Task<IReadOnlyList<SourceFolderListing>> ListSourceFoldersAsync(CancellationToken ct)
+    {
+        var listings = new List<SourceFolderListing>();
+        foreach (var source in _sourcesOptions.CurrentValue?.Sources ?? [])
+        {
+            if (ct.IsCancellationRequested) break;
+            var pattern = string.IsNullOrWhiteSpace(source.Pattern) ? "*.*" : source.Pattern;
+            if (string.IsNullOrWhiteSpace(source.Path) || !Directory.Exists(source.Path))
+            {
+                listings.Add(SourceFolderListing.Failed(source.Name, "local", pattern, Path.DirectorySeparatorChar, $"path invalid or does not exist: {source.Path}"));
+                continue;
+            }
+            try
+            {
+                var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source.Path));
+                var folders = new List<string> { root };
+                if (source.Recursive)
+                {
+                    foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+                    {
+                        if (ct.IsCancellationRequested) break;
+                        if (!Directory.EnumerateDirectories(dir).Any() || Directory.EnumerateFiles(dir, pattern).Any())
+                        {
+                            folders.Add(dir);
+                        }
+                    }
+                    // The root is reported like any other folder: only if it holds files or has no subfolders.
+                    if (Directory.EnumerateDirectories(root).Any() && !Directory.EnumerateFiles(root, pattern).Any())
+                    {
+                        folders.RemoveAt(0);
+                    }
+                }
+                var keys = folders.Select(f => ProtocolIdentity.BuildKey(ProtocolType.Local, string.Empty, 0, f)).ToList();
+                listings.Add(new SourceFolderListing(source.Name, "local", pattern, Path.DirectorySeparatorChar, keys));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                listings.Add(SourceFolderListing.Failed(source.Name, "local", pattern, Path.DirectorySeparatorChar, ex.Message));
+            }
+        }
+        return Task.FromResult<IReadOnlyList<SourceFolderListing>>(listings);
     }
 
     private async Task ProcessSourceAsync(FileSourceOptions source, CancellationToken ct)

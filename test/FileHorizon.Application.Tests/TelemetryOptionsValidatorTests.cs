@@ -87,4 +87,14 @@ public sealed class TelemetryOptionsValidatorTests
         var options = new TelemetryOptions { EnableOtlpExporter = false, OtlpEndpoint = null };
         Assert.True(Validator.Validate(null, options).Succeeded);
     }
+
+    [Theory]
+    [InlineData("00:00:30", false)]
+    [InlineData("00:01:00", true)]
+    [InlineData("01:00:00", true)]
+    public void RouteInventoryInterval_must_be_at_least_a_minute(string interval, bool valid)
+    {
+        var options = new TelemetryOptions { RouteInventoryInterval = TimeSpan.Parse(interval) };
+        Assert.Equal(valid, Validator.Validate(null, options).Succeeded);
+    }
 }

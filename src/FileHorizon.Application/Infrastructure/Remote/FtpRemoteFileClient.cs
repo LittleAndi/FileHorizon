@@ -58,7 +58,13 @@ public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, str
         _client = client;
     }
 
-    public async IAsyncEnumerable<IRemoteFileInfo> ListFilesAsync(string path, bool recursive, string pattern, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    public IAsyncEnumerable<IRemoteFileInfo> ListFilesAsync(string path, bool recursive, string pattern, CancellationToken ct)
+        => ListAsync(path, recursive, pattern, includeDirectories: false, ct);
+
+    public IAsyncEnumerable<IRemoteFileInfo> ListTreeAsync(string path, bool recursive, string pattern, CancellationToken ct)
+        => ListAsync(path, recursive, pattern, includeDirectories: true, ct);
+
+    private async IAsyncEnumerable<IRemoteFileInfo> ListAsync(string path, bool recursive, string pattern, bool includeDirectories, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         if (_client is null) throw new InvalidOperationException("Client not connected");
         var options = recursive ? FtpListOption.Recursive : FtpListOption.Auto;
@@ -70,6 +76,10 @@ public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, str
             {
                 if (!GlobMatch(item.Name, pattern)) continue;
                 yield return new FtpRemoteFileInfo(item.FullName, item.Name, item.Size, item.Modified.ToUniversalTime(), false);
+            }
+            else if (includeDirectories && recursive && item.Type is FtpObjectType.Directory && item.Name is not ("." or ".."))
+            {
+                yield return new FtpRemoteFileInfo(item.FullName, item.Name, 0, item.Modified.ToUniversalTime(), true);
             }
         }
     }

@@ -45,6 +45,8 @@ public class RemotePollerTests
             foreach (var f in _files) { yield return new FakeRemoteFileInfo(f.FullPath, f.Size, f.LastWrite, f.IsDir); await Task.Yield(); }
             if (_listFailure is not null) throw _listFailure; // fails after the listed files, like a stalled READDIR batch
         }
+        public IAsyncEnumerable<IRemoteFileInfo> ListTreeAsync(string remotePath, bool recursive, string pattern, CancellationToken ct)
+            => ListFilesAsync(remotePath, recursive, pattern, ct); // the fake already yields directories
         public Task<IRemoteFileInfo?> GetFileInfoAsync(string path, CancellationToken ct) => Task.FromResult<IRemoteFileInfo?>(null); // not used
         public Task DeleteAsync(string fullPath, CancellationToken ct) => Task.CompletedTask; // deletion not exercised in these tests
     }
@@ -308,5 +310,39 @@ public class RemotePollerTests
 
         // Swallowing it would mean a "Failed to connect" warning, a poll.source.errors increment and backoff for a shutdown.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poller.PollAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task ListSourceFoldersAsync_ReportsFolderKeysAndConnectFailures()
+    {
+        var opts = CreateOptions(
+            new FtpSourceOptions { Name = "partners", Host = "h", Port = 21, RemotePath = "/partners", Pattern = "*.xml" },
+            new FtpSourceOptions { Name = "down", Host = "x", Port = 21, RemotePath = "/" });
+        var now = DateTimeOffset.UtcNow;
+        var call = 0; // sources are listed in configuration order: "partners", then "down"
+        var poller = new TestRemotePoller(new TestQueue(), opts, _ => call++ == 1
+            ? new FakeRemoteClient("x", 21, ProtocolType.Ftp, [], failConnect: true)
+            : new FakeRemoteClient("h", 21, ProtocolType.Ftp,
+            [
+                new FakeRemoteFile("/partners/acme", 0, now, IsDir: true),
+                new FakeRemoteFile("/partners/acme/ORDRSP", 0, now, IsDir: true),
+                new FakeRemoteFile("/partners/acme/INVOIC", 0, now, IsDir: true),
+                new FakeRemoteFile("/partners/acme/INVOIC/1.xml", 5, now),
+            ]));
+
+        var listings = await poller.ListSourceFoldersAsync(CancellationToken.None);
+
+        Assert.Equal(2, listings.Count);
+        var ok = listings[0];
+        Assert.Equal("partners", ok.Source);
+        Assert.Equal("ftp", ok.Protocol);
+        Assert.Equal("*.xml", ok.Pattern);
+        Assert.Null(ok.Error);
+        Assert.Equal(["ftp://h:21/partners/acme/INVOIC", "ftp://h:21/partners/acme/ORDRSP"], ok.Folders);
+
+        var failed = listings[1];
+        Assert.Equal("down", failed.Source);
+        Assert.Equal("connect fail", failed.Error);
+        Assert.Empty(failed.Folders);
     }
 }

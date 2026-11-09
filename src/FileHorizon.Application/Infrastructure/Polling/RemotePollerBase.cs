@@ -8,7 +8,7 @@ using Microsoft.Extensions.Options;
 
 namespace FileHorizon.Application.Infrastructure.Polling;
 
-public abstract class RemotePollerBase : IFilePoller
+public abstract class RemotePollerBase : IFilePoller, ISourceFolderLister
 {
     private readonly IFileEventQueue _queue;
     private readonly ILogger _logger;
@@ -360,6 +360,46 @@ public abstract class RemotePollerBase : IFilePoller
         return Result<IdempotencySeedResult>.Success(
             new IdempotencySeedResult(source.Name, pattern, scanned, marked, alreadyMarked, samples));
     }
+
+    /// <summary>
+    /// Walks each enabled source's tree for the route inventory. A source that cannot be reached is
+    /// reported with its error rather than failing the whole inventory; it does not affect polling backoff.
+    /// </summary>
+    public async Task<IReadOnlyList<SourceFolderListing>> ListSourceFoldersAsync(CancellationToken ct)
+    {
+        var listings = new List<SourceFolderListing>();
+        foreach (var source in GetEnabledSources())
+        {
+            if (ct.IsCancellationRequested) break;
+            // Known before connecting so a source that fails to connect is still reported under its protocol.
+            var protocol = MapProtocolType(default);
+            try
+            {
+                await using var client = CreateClient(source);
+                protocol = MapProtocolType(client.Protocol);
+                await client.ConnectAsync(ct).ConfigureAwait(false);
+
+                var collector = new RemoteFolderCollector(source.RemotePath, source.Recursive);
+                await foreach (var entry in client.ListTreeAsync(source.RemotePath, source.Recursive, source.Pattern, ct).ConfigureAwait(false))
+                {
+                    if (entry.IsDirectory) collector.AddDirectory(entry.FullPath);
+                    else collector.AddFile(entry.FullPath);
+                }
+
+                var folders = collector.Folders()
+                    .Select(dir => ProtocolIdentity.BuildKey(protocol, client.Host, client.Port, dir))
+                    .ToList();
+                listings.Add(new SourceFolderListing(source.Name, ProtocolName(protocol), source.Pattern, '/', folders));
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                listings.Add(SourceFolderListing.Failed(source.Name, ProtocolName(protocol), source.Pattern, '/', ex.Message));
+            }
+        }
+        return listings;
+    }
+
+    private static string ProtocolName(ProtocolType protocol) => protocol.ToString().ToLowerInvariant();
 
     protected abstract List<IRemoteFileSourceDescriptor> GetEnabledSources();
     protected abstract IRemoteFileClient CreateClient(IRemoteFileSourceDescriptor source);
