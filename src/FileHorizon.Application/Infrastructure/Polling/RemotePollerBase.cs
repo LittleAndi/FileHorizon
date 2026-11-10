@@ -69,6 +69,7 @@ public abstract class RemotePollerBase : IFilePoller
         cycleActivity?.SetTag("sources.count", sources.Count);
         Common.Telemetry.TelemetryInstrumentation.PollCycles.Add(1);
 
+        var queueAccepting = true;
         foreach (var src in sources)
         {
             if (ct.IsCancellationRequested)
@@ -87,7 +88,7 @@ public abstract class RemotePollerBase : IFilePoller
             _logger.LogDebug("Polling remote source {Name} host={Host} port={Port} path={RemotePath} recursive={Recursive} pattern={Pattern}",
                 src.Name, src.Host, src.Port, src.RemotePath, src.Recursive, src.Pattern);
 
-            var queueAccepting = await PollSourceAsync(src, ct).ConfigureAwait(false);
+            queueAccepting = await PollSourceAsync(src, ct).ConfigureAwait(false);
 
             // NEW: per-source completion log
             _logger.LogTrace("Completed poll for source {Name}", src.Name);
@@ -95,6 +96,10 @@ public abstract class RemotePollerBase : IFilePoller
             // The next source would hit the same queue; leave the rest of the cycle until the pause is over.
             if (!queueAccepting) break;
         }
+
+        // A cycle without a rejection ends the streak, even when it had nothing to enqueue. Otherwise a streak
+        // whose rejected file went away would make an unrelated rejection much later start from a long pause.
+        if (queueAccepting && !ct.IsCancellationRequested) _queueRejections = 0;
 
         var elapsed = (DateTimeOffset.UtcNow - cycleStart).TotalMilliseconds;
         Common.Telemetry.TelemetryInstrumentation.PollCycleDurationMs.Record(elapsed);
@@ -105,7 +110,7 @@ public abstract class RemotePollerBase : IFilePoller
         return Result.Success();
     }
 
-    /// <returns>False when the queue rejected a file for a reason that is not specific to that file, which ends the cycle.</returns>
+    /// <returns>False when the queue rejected a file with a transient error, which ends the cycle and pauses the poller.</returns>
     private async Task<bool> PollSourceAsync(IRemoteFileSourceDescriptor source, CancellationToken ct)
     {
         using var sourceActivity = Common.Telemetry.TelemetryInstrumentation.ActivitySource.StartActivity("poll.remote.source", System.Diagnostics.ActivityKind.Internal);
@@ -162,6 +167,8 @@ public abstract class RemotePollerBase : IFilePoller
         var unstableCount = 0;
         var duplicateCount = 0;
         var invalidCount = 0;
+        var refusedCount = 0;
+        var listingFailed = false;
         (string Key, Error Error)? rejection = null;
 
         try
@@ -233,6 +240,10 @@ public abstract class RemotePollerBase : IFilePoller
 
                 _observations[key] = newSnap;
 
+                // After a transient queue rejection nothing more is offered this cycle, but the rest of the
+                // listing is still observed so those files do not start their stability window after the outage.
+                if (rejection is not null) continue;
+
                 var stableFor = prev is null ? TimeSpan.Zero : (DateTimeOffset.UtcNow - newSnap.LastObservedUtc);
                 // Recompute readiness using original previous snapshot (prev) which had the old baseline
                 var ready = await readiness.IsReadyAsync(file, prev, ct).ConfigureAwait(false);
@@ -262,17 +273,28 @@ public abstract class RemotePollerBase : IFilePoller
                     continue;
                 }
 
-                if (enqueued.IsFailure)
+                if (enqueued.IsFailure && enqueued.Error.IsTransient)
                 {
-                    // Not recorded as dispatched, so the file is offered again on a later poll. This is
-                    // at-least-once: a failure reported after the queue had in fact stored the event (e.g. a Redis
-                    // timeout) leads to a second event for the same version, which the idempotency check absorbs.
-                    // Stop here: the fault is in the queue, so the next file would be rejected too.
+                    // The queue itself is failing, so the next file would be rejected too. Not recorded as
+                    // dispatched: the file is offered again after the pause. That makes dispatch at-least-once.
+                    // A failure reported after the queue had in fact stored the event (e.g. a Redis timeout) leads
+                    // to a second event for the same version. With Idempotency:Enabled (off by default) the second
+                    // one is skipped unless both are processed at the same time; without it the file is
+                    // transferred twice. Losing the file, as before, is the worse outcome.
                     rejection = (key, enqueued.Error);
-                    break;
+                    continue;
                 }
 
-                _queueRejections = 0;
+                if (enqueued.IsFailure)
+                {
+                    // Neither marked invalid nor transient, so there is no telling whether a retry can succeed.
+                    // Treat it as this file's problem: do not record it (it is offered again next poll, so it is
+                    // not lost if the cause passes) and do not pause (it must not hold up other files or sources).
+                    _logger.LogWarning("Queue refused remote file {Key}: {Error}. It is offered again on the next poll.", key, enqueued.Error);
+                    refusedCount++;
+                    continue;
+                }
+
                 _dispatched[key] = (newSnap.Size, newSnap.LastWriteTimeUtc);
                 readyCount++;
             }
@@ -291,26 +313,31 @@ public abstract class RemotePollerBase : IFilePoller
                 source.Protocol, source.Name, client.Host, client.Port, source.RemotePath, seen);
             RecordSourceError(source);
             RegisterFailure(source.Name);
-            return true;
+            listingFailed = true;
         }
 
         // A listing cut short by shutdown is neither a success nor a failure: leave backoff and logs alone.
         if (ct.IsCancellationRequested) return true;
 
+        // The source connected and listed, so its own failure streak is over whatever the queue did.
+        if (!listingFailed) ResetBackoff(source.Name);
+
         if (rejection is { } rejected)
         {
-            // The source itself answered, so it gets no error count and no backoff: queue.enqueue.failures is
-            // the signal for this, and the pause covers every source of this poller.
+            // The source gets no error count and no backoff for this: the pause covers every source of this
+            // poller, and queue.enqueue.failures is the metric.
             var pause = RegisterQueueRejection();
             _logger.LogWarning("Queue rejected {Key} from {Protocol} source {Name}: {Error}. Remote polling paused for {PauseSeconds}s; the file is offered again afterwards. itemsSeen={Seen}, enqueued={Ready}",
                 rejected.Key, source.Protocol, source.Name, rejected.Error, (int)pause.TotalSeconds, seen, readyCount);
             return false;
         }
 
-        ResetBackoff(source.Name);
+        if (!listingFailed)
+        {
+            _logger.LogDebug("Completed listing for source {Name}. itemsSeen={Seen}, ready={Ready}, unstable={Unstable}, duplicate={Duplicate}, invalid={Invalid}, refused={Refused}",
+                source.Name, seen, readyCount, unstableCount, duplicateCount, invalidCount, refusedCount);
+        }
 
-        _logger.LogDebug("Completed listing for source {Name}. itemsSeen={Seen}, ready={Ready}, unstable={Unstable}, duplicate={Duplicate}, invalid={Invalid}",
-            source.Name, seen, readyCount, unstableCount, duplicateCount, invalidCount);
         return true;
     }
 
@@ -419,8 +446,9 @@ public abstract class RemotePollerBase : IFilePoller
                 }
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
+            // Includes a secret-lookup timeout, which surfaces as TaskCanceledException although ct is not cancelled.
             // Markers written before the failure are durable and correct; report progress with the error
             // so a partial run can simply be repeated.
             _logger.LogError(ex, "Idempotency seed for source {Source} failed after scanning {Scanned} file(s)", source.Name, scanned);
@@ -491,7 +519,7 @@ public abstract class RemotePollerBase : IFilePoller
         return delay > _maxBackoff ? _maxBackoff : delay;
     }
 
-    /// <summary>Pauses the whole poller after a queue rejection. The streak ends with the next accepted enqueue.</summary>
+    /// <summary>Pauses the whole poller after a transient queue rejection. The streak ends with the next cycle that has none.</summary>
     private TimeSpan RegisterQueueRejection()
     {
         var pause = BackoffDelay(++_queueRejections);
