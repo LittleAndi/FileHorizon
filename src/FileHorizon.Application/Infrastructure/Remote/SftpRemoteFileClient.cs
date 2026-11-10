@@ -51,7 +51,6 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         _timeouts = timeouts ?? SftpTimeouts.Default;
     }
 
-    public ProtocolType Protocol => ProtocolType.Sftp;
     public string Host => _host;
     public int Port => _port;
 

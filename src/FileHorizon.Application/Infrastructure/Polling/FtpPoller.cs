@@ -40,12 +40,11 @@ public sealed class FtpPoller(IFileEventQueue queue,
         return new FtpRemoteFileClient(_loggerFactory.CreateLogger<FtpRemoteFileClient>(), s.Host, s.Port, s.Username, password, s.Passive, s.AllowInvalidCertificate);
     }
 
-    protected override ProtocolType MapProtocolType(ProtocolType protocol) => ProtocolType.Ftp;
-
     private sealed class FtpSourceDescriptor(FtpSourceOptions options) : IRemoteFileSourceDescriptor
     {
         public FtpSourceOptions Options { get; } = options;
         public string Name => Options.Name;
+        public ProtocolType Protocol => ProtocolType.Ftp;
         public string RemotePath => Options.RemotePath;
         public string Pattern => Options.Pattern;
         public bool Recursive => Options.Recursive;

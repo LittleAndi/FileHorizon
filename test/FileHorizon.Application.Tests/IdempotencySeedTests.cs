@@ -172,6 +172,19 @@ public class IdempotencySeedTests
         Assert.Equal("Idempotency.SeedFailed", seed.Error.Code);
     }
 
+    [Fact]
+    public async Task SeedIdempotencyAsync_SecretLookupTimeout_ReturnsFailure()
+    {
+        // A secret-store timeout while creating the client surfaces as TaskCanceledException although nothing was cancelled.
+        var poller = CreatePoller(new TestQueue(), [], minStableSeconds: 0, createFailure: new TaskCanceledException("secret lookup timed out"));
+
+        var seed = await poller.SeedIdempotencyAsync(
+            new IdempotencySeedRequest(SourceName), new InMemoryIdempotencyStore(), CancellationToken.None);
+
+        Assert.True(seed.IsFailure);
+        Assert.Equal("Idempotency.SeedFailed", seed.Error.Code);
+    }
+
     private static TestRemotePoller CreatePoller(
         TestQueue queue,
         FakeFile file,
@@ -182,7 +195,8 @@ public class IdempotencySeedTests
         FakeFile[] files,
         int minStableSeconds,
         string pattern = "*.zip",
-        bool failConnect = false)
+        bool failConnect = false,
+        Exception? createFailure = null)
     {
         var options = new OptionsMonitorStub<RemoteFileSourcesOptions>(new RemoteFileSourcesOptions
         {
@@ -202,7 +216,7 @@ public class IdempotencySeedTests
                 }
             ]
         });
-        return new TestRemotePoller(queue, options, _ => new FakeRemoteClient(Host, Port, files, failConnect));
+        return new TestRemotePoller(queue, options, _ => createFailure is null ? new FakeRemoteClient(Host, Port, files, failConnect) : throw createFailure);
     }
 
     private sealed record FakeFile(string FullPath, long Size, DateTimeOffset LastWrite, bool IsDir = false);
@@ -218,7 +232,6 @@ public class IdempotencySeedTests
 
     private sealed class FakeRemoteClient(string host, int port, FakeFile[] files, bool failConnect) : IRemoteFileClient
     {
-        public ProtocolType Protocol => ProtocolType.Sftp;
         public string Host { get; } = host;
         public int Port { get; } = port;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -300,11 +313,10 @@ public class IdempotencySeedTests
 
         protected override List<IRemoteFileSourceDescriptor> GetEnabledSources() => _sources;
         protected override IRemoteFileClient CreateClient(IRemoteFileSourceDescriptor source) => _clientFactory(source);
-        protected override ProtocolType MapProtocolType(ProtocolType protocol) => protocol;
-
         private sealed class Src(SftpSourceOptions o) : IRemoteFileSourceDescriptor
         {
             public string Name => o.Name;
+            public ProtocolType Protocol => ProtocolType.Sftp;
             public string RemotePath => o.RemotePath;
             public string Pattern => o.Pattern;
             public bool Recursive => o.Recursive;

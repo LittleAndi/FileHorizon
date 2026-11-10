@@ -217,7 +217,15 @@ Files are only enqueued once their size remains stable for `MinStableSeconds`. A
 
 ### Backoff & Resilience
 
-Each remote source tracks consecutive failures. An exponential backoff (base 5s doubling up to 5 minutes) delays subsequent attempts after errors (connection, auth, listing). A single success resets the backoff window.
+Each remote source tracks consecutive failures. An exponential backoff (base 5s doubling up to 5 minutes) delays subsequent attempts after errors (client creation including secret lookup, connection, auth, listing). A single success resets the backoff window.
+
+A rejected enqueue is not a source failure, and `queue.enqueue.failures` (not `poll.source.errors`) counts it. What the remote pollers do depends on the error the queue returns:
+
+- **Invalid** (`Validation.*`, for example a listing without a parsable size): that version of the file is skipped for good and the rest of the listing continues.
+- **Transient** (Redis unreachable or timed out, queue full): the whole FTP or SFTP poller pauses with the same exponential delay, and the file is offered again afterwards. A cycle without such a rejection ends the streak.
+- **Anything else**: the file is skipped for this cycle and offered again on the next poll; other files and sources are not held up.
+
+Retrying after a transient rejection makes dispatch at-least-once. If Redis stored the event but the reply timed out, the file is enqueued a second time. With `Idempotency:Enabled=true` the second event is skipped, unless two workers process both at the same moment. With the default (`false`) the file is transferred twice, and with `DeleteAfterTransfer=true` the second event fails as file-not-found. Enable idempotency if a duplicate delivery is a problem downstream.
 
 ---
 

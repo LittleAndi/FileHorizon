@@ -63,12 +63,11 @@ public sealed class SftpPoller(IFileEventQueue queue,
             s.Timeouts());
     }
 
-    protected override ProtocolType MapProtocolType(ProtocolType protocol) => ProtocolType.Sftp;
-
     private sealed class SftpSourceDescriptor(SftpSourceOptions options) : IRemoteFileSourceDescriptor
     {
         public SftpSourceOptions Options { get; } = options;
         public string Name => Options.Name;
+        public ProtocolType Protocol => ProtocolType.Sftp;
         public string RemotePath => Options.RemotePath;
         public string Pattern => Options.Pattern;
         public bool Recursive => Options.Recursive;
