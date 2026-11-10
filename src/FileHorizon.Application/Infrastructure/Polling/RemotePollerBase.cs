@@ -487,12 +487,9 @@ public abstract class RemotePollerBase : IFilePoller, ISourceFolderLister
         foreach (var source in GetEnabledSources())
         {
             if (ct.IsCancellationRequested) break;
-            // Known before connecting so a source that fails to connect is still reported under its protocol.
-            var protocol = MapProtocolType(default);
             try
             {
                 await using var client = CreateClient(source);
-                protocol = MapProtocolType(client.Protocol);
                 await client.ConnectAsync(ct).ConfigureAwait(false);
 
                 var collector = new RemoteFolderCollector(source.RemotePath, source.Recursive);
@@ -503,19 +500,17 @@ public abstract class RemotePollerBase : IFilePoller, ISourceFolderLister
                 }
 
                 var folders = collector.Folders()
-                    .Select(dir => ProtocolIdentity.BuildKey(protocol, client.Host, client.Port, dir))
+                    .Select(dir => ProtocolIdentity.BuildKey(source.Protocol, client.Host, client.Port, dir))
                     .ToList();
-                listings.Add(new SourceFolderListing(source.Name, ProtocolName(protocol), source.Pattern, '/', folders));
+                listings.Add(new SourceFolderListing(source.Name, ProtocolTag(source), source.Pattern, '/', folders));
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
-                listings.Add(SourceFolderListing.Failed(source.Name, ProtocolName(protocol), source.Pattern, '/', ex.Message));
+                listings.Add(SourceFolderListing.Failed(source.Name, ProtocolTag(source), source.Pattern, '/', ex.Message));
             }
         }
         return listings;
     }
-
-    private static string ProtocolName(ProtocolType protocol) => protocol.ToString().ToLowerInvariant();
 
     protected abstract List<IRemoteFileSourceDescriptor> GetEnabledSources();
     protected abstract IRemoteFileClient CreateClient(IRemoteFileSourceDescriptor source);

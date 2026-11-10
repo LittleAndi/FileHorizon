@@ -614,8 +614,8 @@ public class RemotePollerTests
         var now = DateTimeOffset.UtcNow;
         var call = 0; // sources are listed in configuration order: "partners", then "down"
         var poller = new TestRemotePoller(new TestQueue(), opts, _ => call++ == 1
-            ? new FakeRemoteClient("x", 21, ProtocolType.Ftp, [], failConnect: true)
-            : new FakeRemoteClient("h", 21, ProtocolType.Ftp,
+            ? new FakeRemoteClient("x", 21, [], failConnect: true)
+            : new FakeRemoteClient("h", 21,
             [
                 new FakeRemoteFile("/partners/acme", 0, now, IsDir: true),
                 new FakeRemoteFile("/partners/acme/ORDRSP", 0, now, IsDir: true),
