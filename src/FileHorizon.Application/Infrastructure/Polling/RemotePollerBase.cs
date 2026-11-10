@@ -16,16 +16,22 @@ public abstract class RemotePollerBase : IFilePoller
     private readonly ConcurrentDictionary<string, FileObservationSnapshot> _observations = new();
     private readonly ConcurrentDictionary<string, (long Size, DateTimeOffset MTime)> _dispatched = new();
     private readonly ConcurrentDictionary<string, BackoffState> _backoff = new();
+    private readonly TimeSpan _baseBackoff = TimeSpan.FromSeconds(5);
     private readonly TimeSpan _maxBackoff = TimeSpan.FromMinutes(5);
+    private readonly TimeProvider _time;
 
-    /// <summary>Delay after a source's first failure; doubles per consecutive failure up to the cap.</summary>
-    protected virtual TimeSpan BaseBackoff => TimeSpan.FromSeconds(5);
+    // The queue is shared by every source, so its rejections pause the whole poller rather than one source.
+    // Polls never overlap, so plain fields are enough.
+    private int _queueRejections;
+    private DateTimeOffset _queuePausedUntilUtc;
 
     /// <summary>How many generated keys a seeding run reports back for inspection.</summary>
     private const int SeedSampleKeyCount = 5;
 
-    protected RemotePollerBase(IFileEventQueue queue, IOptionsMonitor<RemoteFileSourcesOptions> remoteOptions, ILogger logger)
+    /// <param name="timeProvider">Clock for source backoff and the queue pause; defaults to the system clock.</param>
+    protected RemotePollerBase(IFileEventQueue queue, IOptionsMonitor<RemoteFileSourcesOptions> remoteOptions, ILogger logger, TimeProvider? timeProvider = null)
     {
+        _time = timeProvider ?? TimeProvider.System;
         _queue = queue;
         _remoteOptions = remoteOptions;
         _logger = logger;
@@ -53,6 +59,13 @@ public abstract class RemotePollerBase : IFilePoller
             return Result.Success();
         }
 
+        var queuePauseRemaining = _queuePausedUntilUtc - _time.GetUtcNow();
+        if (queuePauseRemaining > TimeSpan.Zero)
+        {
+            _logger.LogTrace("Skipping remote poll cycle: queue pause active. remainingSeconds={RemainingSeconds}", (int)queuePauseRemaining.TotalSeconds);
+            return Result.Success();
+        }
+
         cycleActivity?.SetTag("sources.count", sources.Count);
         Common.Telemetry.TelemetryInstrumentation.PollCycles.Add(1);
 
@@ -74,10 +87,13 @@ public abstract class RemotePollerBase : IFilePoller
             _logger.LogDebug("Polling remote source {Name} host={Host} port={Port} path={RemotePath} recursive={Recursive} pattern={Pattern}",
                 src.Name, src.Host, src.Port, src.RemotePath, src.Recursive, src.Pattern);
 
-            await PollSourceAsync(src, ct).ConfigureAwait(false);
+            var queueAccepting = await PollSourceAsync(src, ct).ConfigureAwait(false);
 
             // NEW: per-source completion log
             _logger.LogTrace("Completed poll for source {Name}", src.Name);
+
+            // The next source would hit the same queue; leave the rest of the cycle until the pause is over.
+            if (!queueAccepting) break;
         }
 
         var elapsed = (DateTimeOffset.UtcNow - cycleStart).TotalMilliseconds;
@@ -89,7 +105,8 @@ public abstract class RemotePollerBase : IFilePoller
         return Result.Success();
     }
 
-    private async Task PollSourceAsync(IRemoteFileSourceDescriptor source, CancellationToken ct)
+    /// <returns>False when the queue rejected a file for a reason that is not specific to that file, which ends the cycle.</returns>
+    private async Task<bool> PollSourceAsync(IRemoteFileSourceDescriptor source, CancellationToken ct)
     {
         using var sourceActivity = Common.Telemetry.TelemetryInstrumentation.ActivitySource.StartActivity("poll.remote.source", System.Diagnostics.ActivityKind.Internal);
         sourceActivity?.SetTag("poll.source", source.Name);
@@ -102,14 +119,20 @@ public abstract class RemotePollerBase : IFilePoller
         {
             createdClient = CreateClient(source);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ct.IsCancellationRequested && ex is not OperationCanceledException)
         {
-            // Client creation resolves secrets, which can fail (e.g. an unreachable secret store). Like a failed
-            // connect, that belongs to this source and must not abort the cycle for the sources after it.
+            // Same as connect and listing below: an error raised while shutdown is in progress is cancellation.
+            throw new OperationCanceledException("Polling was cancelled while creating the source client.", ex, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            // Client creation resolves secrets, which can fail or time out (a timeout surfaces as
+            // TaskCanceledException while ct is not cancelled). Like a failed connect, that belongs to this
+            // source and must not abort the cycle for the sources after it.
             _logger.LogWarning(ex, "Failed to create {Protocol} client for source {Name}@{Host}:{Port}", source.Protocol, source.Name, source.Host, source.Port);
-            RecordSourceError(source.Protocol, source);
+            RecordSourceError(source);
             RegisterFailure(source.Name);
-            return;
+            return true;
         }
 
         await using var client = createdClient;
@@ -124,10 +147,10 @@ public abstract class RemotePollerBase : IFilePoller
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            _logger.LogWarning(ex, "Failed to connect to {Protocol} source {Name}@{Host}:{Port}", client.Protocol, source.Name, client.Host, client.Port);
-            RecordSourceError(client.Protocol, source);
+            _logger.LogWarning(ex, "Failed to connect to {Protocol} source {Name}@{Host}:{Port}", source.Protocol, source.Name, client.Host, client.Port);
+            RecordSourceError(source);
             RegisterFailure(source.Name);
-            return;
+            return true;
         }
 
         // Track window and counters
@@ -138,7 +161,8 @@ public abstract class RemotePollerBase : IFilePoller
         var readyCount = 0;
         var unstableCount = 0;
         var duplicateCount = 0;
-        string? rejectedKey = null;
+        var invalidCount = 0;
+        (string Key, Error Error)? rejection = null;
 
         try
         {
@@ -148,7 +172,7 @@ public abstract class RemotePollerBase : IFilePoller
                 if (ct.IsCancellationRequested) break;
                 if (file.IsDirectory) continue;
 
-                var key = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
+                var key = ProtocolIdentity.BuildKey(source.Protocol, client.Host, client.Port, file.FullPath);
                 _observations.TryGetValue(key, out var prev);
                 // Only the exact dispatched version counts; a changed size/mtime is a new version to re-dispatch.
                 var alreadyDispatched = _dispatched.TryGetValue(key, out var dispatchedVersion)
@@ -216,7 +240,7 @@ public abstract class RemotePollerBase : IFilePoller
                 if (!ready)
                 {
                     unstableCount++;
-                    Common.Telemetry.TelemetryInstrumentation.FilesSkippedUnstable.Add(1, KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()));
+                    Common.Telemetry.TelemetryInstrumentation.FilesSkippedUnstable.Add(1, KeyValuePair.Create<string, object?>("file.protocol", ProtocolTag(source)));
                     continue;
                 }
 
@@ -227,15 +251,28 @@ public abstract class RemotePollerBase : IFilePoller
                     continue;
                 }
 
-                var enqueued = await EnqueueEventAsync(source, client, file, key, ct).ConfigureAwait(false);
-                if (!enqueued.IsSuccess)
+                var enqueued = await EnqueueEventAsync(source, file, key, ct).ConfigureAwait(false);
+                if (enqueued.IsFailure && enqueued.Error.IsValidation)
                 {
-                    // Not recorded as dispatched, so the file is offered again on a later poll. Stop here: a queue
-                    // that rejects one file will most likely reject the next, and backoff gives it time to recover.
-                    rejectedKey = key;
+                    // The queue will never accept this version of the file (e.g. a listing without a parsable
+                    // size). Record it so it is not offered again until it changes, and carry on with the rest.
+                    _logger.LogWarning("Skipping remote file {Key}: the queue rejected it as invalid ({Error}). It is not offered again unless its size or mtime changes.", key, enqueued.Error);
+                    _dispatched[key] = (newSnap.Size, newSnap.LastWriteTimeUtc);
+                    invalidCount++;
+                    continue;
+                }
+
+                if (enqueued.IsFailure)
+                {
+                    // Not recorded as dispatched, so the file is offered again on a later poll. This is
+                    // at-least-once: a failure reported after the queue had in fact stored the event (e.g. a Redis
+                    // timeout) leads to a second event for the same version, which the idempotency check absorbs.
+                    // Stop here: the fault is in the queue, so the next file would be rejected too.
+                    rejection = (key, enqueued.Error);
                     break;
                 }
 
+                _queueRejections = 0;
                 _dispatched[key] = (newSnap.Size, newSnap.LastWriteTimeUtc);
                 readyCount++;
             }
@@ -251,36 +288,41 @@ public abstract class RemotePollerBase : IFilePoller
             // A failed listing or enqueue (including an SFTP operation timeout on a half-open connection) must not abort
             // the cycle for other sources. Files seen before the failure keep their observations and dispatches.
             _logger.LogError(ex, "Poll failed for {Protocol} source {Name}@{Host}:{Port} path={Path} after {Seen} item(s)",
-                client.Protocol, source.Name, client.Host, client.Port, source.RemotePath, seen);
-            RecordSourceError(client.Protocol, source);
+                source.Protocol, source.Name, client.Host, client.Port, source.RemotePath, seen);
+            RecordSourceError(source);
             RegisterFailure(source.Name);
-            return;
+            return true;
         }
 
         // A listing cut short by shutdown is neither a success nor a failure: leave backoff and logs alone.
-        if (ct.IsCancellationRequested) return;
+        if (ct.IsCancellationRequested) return true;
 
-        if (rejectedKey is not null)
+        if (rejection is { } rejected)
         {
-            _logger.LogWarning("Poll stopped for {Protocol} source {Name}@{Host}:{Port} after {Seen} item(s): the queue rejected {Key}. enqueued={Ready}",
-                client.Protocol, source.Name, client.Host, client.Port, seen, rejectedKey, readyCount);
-            RecordSourceError(client.Protocol, source);
-            RegisterFailure(source.Name);
-            return;
+            // The source itself answered, so it gets no error count and no backoff: queue.enqueue.failures is
+            // the signal for this, and the pause covers every source of this poller.
+            var pause = RegisterQueueRejection();
+            _logger.LogWarning("Queue rejected {Key} from {Protocol} source {Name}: {Error}. Remote polling paused for {PauseSeconds}s; the file is offered again afterwards. itemsSeen={Seen}, enqueued={Ready}",
+                rejected.Key, source.Protocol, source.Name, rejected.Error, (int)pause.TotalSeconds, seen, readyCount);
+            return false;
         }
 
         ResetBackoff(source.Name);
 
-        _logger.LogDebug("Completed listing for source {Name}. itemsSeen={Seen}, ready={Ready}, unstable={Unstable}, duplicate={Duplicate}",
-            source.Name, seen, readyCount, unstableCount, duplicateCount);
+        _logger.LogDebug("Completed listing for source {Name}. itemsSeen={Seen}, ready={Ready}, unstable={Unstable}, duplicate={Duplicate}, invalid={Invalid}",
+            source.Name, seen, readyCount, unstableCount, duplicateCount, invalidCount);
+        return true;
     }
 
-    private static void RecordSourceError(ProtocolType protocol, IRemoteFileSourceDescriptor source)
+    private static string ProtocolTag(IRemoteFileSourceDescriptor source) => source.Protocol.ToString().ToLowerInvariant();
+
+    private static void RecordSourceError(IRemoteFileSourceDescriptor source)
         => Common.Telemetry.TelemetryInstrumentation.PollSourceErrors.Add(1,
-            KeyValuePair.Create<string, object?>("file.protocol", protocol.ToString().ToLowerInvariant()),
+            KeyValuePair.Create<string, object?>("file.protocol", ProtocolTag(source)),
             KeyValuePair.Create<string, object?>("poll.source", source.Name));
 
-    private async Task<Result> EnqueueEventAsync(IRemoteFileSourceDescriptor source, IRemoteFileClient client, IRemoteFileInfo file, string identityKey, CancellationToken ct)
+    /// <summary>Offers the file to the queue. A failed result is returned for the caller to log and act on.</summary>
+    private async Task<Result> EnqueueEventAsync(IRemoteFileSourceDescriptor source, IRemoteFileInfo file, string identityKey, CancellationToken ct)
     {
         var metadata = BuildMetadata(file, identityKey);
 
@@ -289,18 +331,14 @@ public abstract class RemotePollerBase : IFilePoller
             Id: Guid.NewGuid().ToString("N"),
             Metadata: metadata,
             DiscoveredAtUtc: DateTimeOffset.UtcNow,
-            Protocol: client.Protocol.ToString().ToLowerInvariant(),
+            Protocol: ProtocolTag(source),
             DestinationPath: destination,
             DeleteAfterTransfer: source.DeleteAfterTransfer);
         var result = await _queue.EnqueueAsync(ev, ct).ConfigureAwait(false);
-        if (!result.IsSuccess)
+        if (result.IsSuccess)
         {
-            _logger.LogWarning("Failed to enqueue remote file event {Key}: {Error}", identityKey, result.Error);
-        }
-        else
-        {
-            _logger.LogDebug("Enqueued remote file {Key} ({Protocol})", identityKey, client.Protocol);
-            Common.Telemetry.TelemetryInstrumentation.FilesDiscovered.Add(1, KeyValuePair.Create<string, object?>("file.protocol", client.Protocol.ToString().ToLowerInvariant()));
+            _logger.LogDebug("Enqueued remote file {Key} ({Protocol})", identityKey, source.Protocol);
+            Common.Telemetry.TelemetryInstrumentation.FilesDiscovered.Add(1, KeyValuePair.Create<string, object?>("file.protocol", ProtocolTag(source)));
         }
 
         return result;
@@ -360,7 +398,7 @@ public abstract class RemotePollerBase : IFilePoller
                 if (ct.IsCancellationRequested) break;
                 if (file.IsDirectory) continue;
 
-                var identityKey = ProtocolIdentity.BuildKey(MapProtocolType(client.Protocol), client.Host, client.Port, file.FullPath);
+                var identityKey = ProtocolIdentity.BuildKey(source.Protocol, client.Host, client.Port, file.FullPath);
                 var idempotencyKey = FileIdentity.BuildIdempotencyKey(BuildMetadata(file, identityKey));
 
                 scanned++;
@@ -400,7 +438,6 @@ public abstract class RemotePollerBase : IFilePoller
 
     protected abstract List<IRemoteFileSourceDescriptor> GetEnabledSources();
     protected abstract IRemoteFileClient CreateClient(IRemoteFileSourceDescriptor source);
-    protected abstract ProtocolType MapProtocolType(ProtocolType protocol);
 
     protected interface IRemoteFileSourceDescriptor
     {
@@ -426,7 +463,7 @@ public abstract class RemotePollerBase : IFilePoller
     {
         if (_backoff.TryGetValue(sourceName, out var s))
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _time.GetUtcNow();
             if (s.NextAttemptUtc > now)
             {
                 remaining = s.NextAttemptUtc - now;
@@ -440,12 +477,26 @@ public abstract class RemotePollerBase : IFilePoller
     private void RegisterFailure(string sourceName)
     {
         var state = _backoff.AddOrUpdate(sourceName, _ => new BackoffState { Failures = 1 }, (_, existing) => { existing.Failures++; return existing; });
-        var exponent = Math.Min(state.Failures - 1, 6); // cap growth
-        var delay = TimeSpan.FromMilliseconds(BaseBackoff.TotalMilliseconds * Math.Pow(2, exponent));
-        if (delay > _maxBackoff) delay = _maxBackoff;
-        state.NextAttemptUtc = DateTimeOffset.UtcNow + delay;
+        var delay = BackoffDelay(state.Failures);
+        state.NextAttemptUtc = _time.GetUtcNow() + delay;
         _backoff[sourceName] = state;
         _logger.LogDebug("Source {Source} backoff scheduled for {DelaySeconds}s after {Failures} failures", sourceName, (int)delay.TotalSeconds, state.Failures);
+    }
+
+    /// <summary>Exponential delay for the given number of consecutive failures: base doubling up to the cap.</summary>
+    private TimeSpan BackoffDelay(int failures)
+    {
+        var exponent = Math.Min(failures - 1, 6); // cap growth
+        var delay = TimeSpan.FromMilliseconds(_baseBackoff.TotalMilliseconds * Math.Pow(2, exponent));
+        return delay > _maxBackoff ? _maxBackoff : delay;
+    }
+
+    /// <summary>Pauses the whole poller after a queue rejection. The streak ends with the next accepted enqueue.</summary>
+    private TimeSpan RegisterQueueRejection()
+    {
+        var pause = BackoffDelay(++_queueRejections);
+        _queuePausedUntilUtc = _time.GetUtcNow() + pause;
+        return pause;
     }
 
     private void ResetBackoff(string sourceName)

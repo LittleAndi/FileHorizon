@@ -300,8 +300,6 @@ public class IdempotencySeedTests
 
         protected override List<IRemoteFileSourceDescriptor> GetEnabledSources() => _sources;
         protected override IRemoteFileClient CreateClient(IRemoteFileSourceDescriptor source) => _clientFactory(source);
-        protected override ProtocolType MapProtocolType(ProtocolType protocol) => protocol;
-
         private sealed class Src(SftpSourceOptions o) : IRemoteFileSourceDescriptor
         {
             public string Name => o.Name;

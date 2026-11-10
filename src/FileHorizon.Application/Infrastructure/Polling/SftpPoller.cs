@@ -63,8 +63,6 @@ public sealed class SftpPoller(IFileEventQueue queue,
             s.Timeouts());
     }
 
-    protected override ProtocolType MapProtocolType(ProtocolType protocol) => ProtocolType.Sftp;
-
     private sealed class SftpSourceDescriptor(SftpSourceOptions options) : IRemoteFileSourceDescriptor
     {
         public SftpSourceOptions Options { get; } = options;

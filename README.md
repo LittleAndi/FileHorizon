@@ -217,7 +217,9 @@ Files are only enqueued once their size remains stable for `MinStableSeconds`. A
 
 ### Backoff & Resilience
 
-Each remote source tracks consecutive failures. An exponential backoff (base 5s doubling up to 5 minutes) delays subsequent attempts after errors (connection, auth, listing). A single success resets the backoff window.
+Each remote source tracks consecutive failures. An exponential backoff (base 5s doubling up to 5 minutes) delays subsequent attempts after errors (client creation including secret lookup, connection, auth, listing). A single success resets the backoff window.
+
+A rejected enqueue is not a source failure. If the queue rejects a file as invalid (for example a listing without a parsable size), that file is skipped and the rest of the listing continues. Any other rejection (for example Redis unreachable) pauses the whole FTP or SFTP poller with the same exponential delay; the file is offered again afterwards, and `queue.enqueue.failures` is the metric to watch.
 
 ---
 

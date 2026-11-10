@@ -56,6 +56,8 @@ public class RemotePollerTests
         public int RejectNext;
         public Task<Result> EnqueueAsync(FileEvent fileEvent, CancellationToken ct)
         {
+            // Like the real queues, validation comes first and is permanent for that event.
+            if (fileEvent.Metadata.SizeBytes < 0) return Task.FromResult(Result.Failure(Error.Validation.NegativeSize));
             if (RejectNext > 0)
             {
                 RejectNext--;
@@ -74,14 +76,11 @@ public class RemotePollerTests
     {
         private readonly List<IRemoteFileSourceDescriptor> _sources;
         private readonly Func<object, IRemoteFileClient> _clientFactory;
-        private readonly TimeSpan? _baseBackoff;
-        internal TestRemotePoller(IFileEventQueue queue, IOptionsMonitor<RemoteFileSourcesOptions> opts, Func<object, IRemoteFileClient> clientFactory, TimeSpan? baseBackoff = null)
-            : base(queue, opts, NullLogger<TestRemotePoller>.Instance)
-        { _clientFactory = clientFactory; _baseBackoff = baseBackoff; _sources = new(); foreach (var f in opts.CurrentValue.Ftp) if (f.Enabled) _sources.Add(new Src(f.Name, f.RemotePath, f.Pattern, f.Recursive, f.MinStableSeconds, f.DestinationPath, f.Host, f.Port)); }
-        protected override TimeSpan BaseBackoff => _baseBackoff ?? base.BaseBackoff;
+        internal TestRemotePoller(IFileEventQueue queue, IOptionsMonitor<RemoteFileSourcesOptions> opts, Func<object, IRemoteFileClient> clientFactory, TimeProvider? time = null)
+            : base(queue, opts, NullLogger<TestRemotePoller>.Instance, time)
+        { _clientFactory = clientFactory; _sources = new(); foreach (var f in opts.CurrentValue.Ftp) if (f.Enabled) _sources.Add(new Src(f.Name, f.RemotePath, f.Pattern, f.Recursive, f.MinStableSeconds, f.DestinationPath, f.Host, f.Port)); }
         protected override List<IRemoteFileSourceDescriptor> GetEnabledSources() => _sources;
         protected override IRemoteFileClient CreateClient(IRemoteFileSourceDescriptor source) => _clientFactory(source);
-        protected override ProtocolType MapProtocolType(ProtocolType protocol) => protocol; // identity mapping
         private sealed class Src(string name, string path, string pattern, bool rec, int stable, string? dest, string host, int port) : IRemoteFileSourceDescriptor
         {
             public string Name => name;
@@ -95,6 +94,14 @@ public class RemotePollerTests
             public bool DeleteAfterTransfer => false; // tests default: no deletion
             public ProtocolType Protocol => ProtocolType.Ftp;
         }
+    }
+
+    /// <summary>A clock that only moves when the test moves it, so backoff and pause windows are deterministic.</summary>
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
     }
 
     private static OptionsMonitorStub<RemoteFileSourcesOptions> CreateOptions(params FtpSourceOptions[] ftp)
@@ -313,17 +320,25 @@ public class RemotePollerTests
     }
 
     [Fact]
-    public async Task PollAsync_RejectedEnqueue_IsRetriedOnLaterPoll()
+    public async Task PollAsync_RejectedEnqueue_IsRetriedAfterQueuePause()
     {
         var opts = CreateOptions(new FtpSourceOptions { Name = "f1", Host = "h", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
         var queue = new TestQueue { RejectNext = 1 };
+        var time = new ManualTimeProvider();
         var file = new FakeRemoteFile("/a.txt", 5, DateTimeOffset.UtcNow.AddMinutes(-10));
-        // No backoff, so the second poll reaches the source straight away.
-        var poller = new TestRemotePoller(queue, opts, _ => new FakeRemoteClient("h", 21, ProtocolType.Ftp, new[] { file }), baseBackoff: TimeSpan.Zero);
+        var clientsCreated = 0;
+        var poller = new TestRemotePoller(queue, opts, _ =>
+        {
+            clientsCreated++;
+            return new FakeRemoteClient("h", 21, ProtocolType.Ftp, new[] { file });
+        }, time);
 
-        await poller.PollAsync(CancellationToken.None); // queue rejects: nothing delivered
+        await poller.PollAsync(CancellationToken.None); // queue rejects: nothing delivered, poller pauses
+        await poller.PollAsync(CancellationToken.None); // inside the pause: the source is not contacted
+        Assert.Equal(1, clientsCreated);
         Assert.Empty(queue.Events);
 
+        time.Advance(TimeSpan.FromSeconds(6)); // first pause is 5s
         await poller.PollAsync(CancellationToken.None); // queue accepts: the unchanged file must be offered again
         await poller.PollAsync(CancellationToken.None); // and only once
 
@@ -332,31 +347,65 @@ public class RemotePollerTests
     }
 
     [Fact]
-    public async Task PollAsync_RejectedEnqueue_CountsAsSourceFailureAndStopsListing()
+    public async Task PollAsync_RejectedEnqueue_PausesAllSourcesWithoutBlamingAny()
     {
-        var opts = CreateOptions(new FtpSourceOptions { Name = "f1", Host = "h", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
+        var opts = CreateOptions(
+            new FtpSourceOptions { Name = "first", Host = "a", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 },
+            new FtpSourceOptions { Name = "second", Host = "b", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
         var queue = new TestQueue { RejectNext = 1 };
+        var time = new ManualTimeProvider();
         var mtime = DateTimeOffset.UtcNow.AddMinutes(-10);
         var clientsCreated = 0;
         var poller = new TestRemotePoller(queue, opts, _ =>
         {
-            clientsCreated++;
-            return new FakeRemoteClient("h", 21, ProtocolType.Ftp, new[] { new FakeRemoteFile("/a.txt", 1, mtime), new FakeRemoteFile("/b.txt", 1, mtime) });
-        });
+            // Polled in configuration order: "first" (rejected), then after the pause "first" and "second".
+            var host = ++clientsCreated == 3 ? "b" : "a";
+            return new FakeRemoteClient(host, 21, ProtocolType.Ftp, new[] { new FakeRemoteFile("/a.txt", 1, mtime), new FakeRemoteFile("/b.txt", 1, mtime) });
+        }, time);
 
-        var errors = await CaptureSourceErrorsAsync(async () =>
-        {
-            await poller.PollAsync(CancellationToken.None); // first file rejected -> listing stops, backoff scheduled
-            await poller.PollAsync(CancellationToken.None); // inside backoff window -> source skipped
-        });
+        var errors = await CaptureSourceErrorsAsync(() => poller.PollAsync(CancellationToken.None));
 
-        Assert.Equal(new object?[] { "f1" }, errors);
-        Assert.Equal(1, clientsCreated);
-        Assert.Empty(queue.Events); // /b.txt was not attempted after the rejection
+        Assert.Empty(errors);           // the fault is the queue's: no source is counted as failing
+        Assert.Equal(1, clientsCreated); // "second" is left until the pause is over
+        Assert.Empty(queue.Events);      // /b.txt was not attempted after the rejection
+
+        time.Advance(TimeSpan.FromSeconds(6));
+        await poller.PollAsync(CancellationToken.None); // no source is in backoff, so both are polled straight away
+
+        Assert.Equal(3, clientsCreated);
+        Assert.Equal(4, queue.Events.Count);
     }
 
     [Fact]
-    public async Task PollAsync_ClientCreationFailure_StaysWithItsSource()
+    public async Task PollAsync_InvalidFile_IsSkippedWithoutBlockingTheRest()
+    {
+        var opts = CreateOptions(new FtpSourceOptions { Name = "f1", Host = "h", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
+        var queue = new TestQueue();
+        var mtime = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var clientsCreated = 0;
+        // FluentFTP reports size -1 when the server's listing has no parsable size; the queue's validator rejects that.
+        var poller = new TestRemotePoller(queue, opts, _ =>
+        {
+            clientsCreated++;
+            return new FakeRemoteClient("h", 21, ProtocolType.Ftp, new[] { new FakeRemoteFile("/bad.txt", -1, mtime), new FakeRemoteFile("/ok.txt", 1, mtime) });
+        }, new ManualTimeProvider());
+
+        var errors = await CaptureSourceErrorsAsync(async () =>
+        {
+            await poller.PollAsync(CancellationToken.None);
+            await poller.PollAsync(CancellationToken.None); // neither paused nor in backoff: the source is polled again
+        });
+
+        Assert.Empty(errors);
+        Assert.Equal(2, clientsCreated);
+        var ev = Assert.Single(queue.TryDrain(10)); // the file listed after the invalid one still flows
+        Assert.EndsWith("/ok.txt", ev.Metadata.SourcePath);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)] // a secret-store timeout surfaces as TaskCanceledException although polling is not cancelled
+    public async Task PollAsync_ClientCreationFailure_StaysWithItsSource(bool timeout)
     {
         var opts = CreateOptions(
             new FtpSourceOptions { Name = "no-secret", Host = "a", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 },
@@ -364,10 +413,11 @@ public class RemotePollerTests
         var queue = new TestQueue();
         var mtime = DateTimeOffset.UtcNow.AddMinutes(-10);
         var clientsRequested = 0;
+        Exception failure = timeout ? new TaskCanceledException("secret lookup timed out") : new InvalidOperationException("secret store unreachable");
         // Sources are polled in configuration order, so the first request belongs to "no-secret".
         var poller = new TestRemotePoller(queue, opts, _ => clientsRequested++ == 0
-            ? throw new InvalidOperationException("secret store unreachable")
-            : new FakeRemoteClient("b", 21, ProtocolType.Ftp, new[] { new FakeRemoteFile("/ok.txt", 1, mtime) }));
+            ? throw failure
+            : new FakeRemoteClient("b", 21, ProtocolType.Ftp, new[] { new FakeRemoteFile("/ok.txt", 1, mtime) }), new ManualTimeProvider());
 
         var errors = await CaptureSourceErrorsAsync(async () =>
         {

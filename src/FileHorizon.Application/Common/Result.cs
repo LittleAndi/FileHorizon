@@ -52,6 +52,12 @@ public readonly record struct Error(string Code, string Message)
 
     public static Error Unspecified(string code, string message) => new(code, message);
 
+    /// <summary>
+    /// True for the <see cref="Validation"/> category: the input itself is unacceptable, so repeating the
+    /// operation with the same input cannot succeed.
+    /// </summary>
+    public bool IsValidation => Code.StartsWith("Validation.", StringComparison.Ordinal);
+
     public override string ToString() => Code == "None" ? "<none>" : $"{Code}: {Message}";
 
     // Domain categories (expand as needed)
