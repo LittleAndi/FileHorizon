@@ -45,11 +45,15 @@ public static class RouteMatcher
     /// </summary>
     /// <remarks>
     /// A glob is split at its last '/': the folder part is matched against the folder, and the file-name
-    /// part is compared with the source pattern. A file-name part of <c>*</c> or <c>**</c>, or one equal to
-    /// the source pattern, takes every file the source picks up (<see cref="FolderMatch.Exact"/>). Two
-    /// different <c>*.ext</c> forms can never overlap (<see cref="FolderMatch.None"/>). Anything else
-    /// depends on the actual names. A regex cannot be split, so it is tried against
-    /// <c>folder/sourcePattern</c> literally and a hit is only ever pattern-dependent.
+    /// part is compared with the source pattern. A file-name part of <c>*</c>, <c>**</c> or empty (a
+    /// trailing '/', which the matcher reads as everything below), one equal to the source pattern, or a
+    /// <c>*.ext</c> that the source's <c>*.ext</c> ends with (<c>*.gz</c> for <c>*.tar.gz</c>) takes every
+    /// file the source picks up (<see cref="FolderMatch.Exact"/>). Two <c>*.ext</c> forms where neither
+    /// extension ends with the other can never overlap (<see cref="FolderMatch.None"/>). Anything else
+    /// depends on the actual names.
+    /// A regex cannot be judged without a real file name, so a rule with <c>PathRegex</c> is always
+    /// pattern-dependent (when its glob, if any, allows the folder). That over-reports regex rules aimed at
+    /// other folders, but the inventory never calls a folder unresolved that the router would route.
     /// </remarks>
     public static FolderMatch MatchFolder(RoutingRuleOptions rule, string protocol, string folder, char separator, string sourcePattern)
     {
@@ -65,7 +69,7 @@ public static class RouteMatcher
             var slash = glob.LastIndexOf('/');
             var fileGlob = slash >= 0 ? glob[(slash + 1)..] : glob;
 
-            if (IsMatchAll(glob) || fileGlob is "**")
+            if (IsMatchAll(glob) || fileGlob is "**" or "")
             {
                 // The file-name part takes any name: the probe stands in for every file.
                 if (!GlobMatch(prefix + Probe, glob)) return FolderMatch.None;
@@ -85,7 +89,6 @@ public static class RouteMatcher
 
         if (!string.IsNullOrWhiteSpace(rule.PathRegex))
         {
-            if (!Regex.IsMatch(prefix + sourcePattern, rule.PathRegex!)) return FolderMatch.None;
             result = FolderMatch.PatternDependent;
         }
 
@@ -101,9 +104,12 @@ public static class RouteMatcher
     {
         if (fileGlob is "*" || string.Equals(fileGlob, sourcePattern, StringComparison.OrdinalIgnoreCase))
             return FolderMatch.Exact;
-        if (IsSimpleExtension(fileGlob, out var ruleExt) && IsSimpleExtension(sourcePattern, out var sourceExt)
-            && !string.Equals(ruleExt, sourceExt, StringComparison.OrdinalIgnoreCase))
-            return FolderMatch.None;
+        if (IsSimpleExtension(fileGlob, out var ruleExt) && IsSimpleExtension(sourcePattern, out var sourceExt))
+        {
+            // Every *.tar.gz is a *.gz; only some *.gz are *.tar.gz; *.xml and *.csv never meet.
+            if (sourceExt.EndsWith("." + ruleExt, StringComparison.OrdinalIgnoreCase)) return FolderMatch.Exact;
+            if (!ruleExt.EndsWith("." + sourceExt, StringComparison.OrdinalIgnoreCase)) return FolderMatch.None;
+        }
         return FolderMatch.PatternDependent;
     }
 

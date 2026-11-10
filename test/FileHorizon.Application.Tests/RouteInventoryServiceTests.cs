@@ -39,7 +39,8 @@ public class RouteInventoryServiceTests
         Rules =
         [
             new RoutingRuleOptions { Name = "ordrsp", Protocol = "sftp", PathGlob = "**/ORDRSP/*.xml", Destinations = ["OrdersBus"] },
-            new RoutingRuleOptions { Name = "invoic", Protocol = "sftp", PathRegex = "/INVOIC/", Destinations = ["Archive"] },
+            // A regex is always pattern-dependent; the glob is what confines the rule to its folder.
+            new RoutingRuleOptions { Name = "invoic", Protocol = "sftp", PathGlob = "**/INVOIC/*.xml", PathRegex = @"/\d+\.xml$", Destinations = ["Archive"] },
         ]
     };
 
@@ -115,6 +116,51 @@ public class RouteInventoryServiceTests
         Single("Route resolved", $"{Root}/acme/ORDRSP");
     }
 
+    [Fact]
+    public async Task RunOnce_NoRules_WarnsOnceAndSkipsTheWalk()
+    {
+        _lister.Listings.Add(new SourceFolderListing("partners", "sftp", "*.xml", '/', [$"{Root}/a", $"{Root}/b"]));
+
+        await Create(new RoutingOptions()).RunOnceAsync(CancellationToken.None);
+
+        var entry = Assert.Single(_logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("No routing rules on this instance", entry.Message);
+        Assert.Equal(0, _lister.Calls);
+    }
+
+    [Fact]
+    public async Task Execute_FailureDuringShutdown_IsNotLoggedAsAnError()
+    {
+        var blocking = new BlockingLister();
+        var service = new RouteInventoryService(
+            () => blocking,
+            Options.Create(new TelemetryOptions { RouteInventoryInterval = TimeSpan.FromHours(1) }),
+            Options.Create(new PipelineOptions()),
+            new OptionsMonitorStub<RoutingOptions>(Rules()),
+            new OptionsMonitorStub<DestinationsOptions>(new DestinationsOptions()),
+            _logger);
+
+        await service.StartAsync(CancellationToken.None);
+        await blocking.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.DoesNotContain(_logger.Entries, e => e.Level >= LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task MultiProtocolPoller_OneListerFailing_DoesNotHideTheOthers()
+    {
+        var logger = new CapturingLogger<MultiProtocolPoller>();
+        var ok = new StubPoller([new SourceFolderListing("ok", "sftp", "*.*", '/', [Root])]);
+        var poller = new MultiProtocolPoller([new StubPoller(null), ok], logger);
+
+        var listings = await poller.ListSourceFoldersAsync(CancellationToken.None);
+
+        Assert.Equal("ok", Assert.Single(listings).Source);
+        Assert.Equal(LogLevel.Error, Assert.Single(logger.Entries).Level);
+    }
+
     [Theory]
     [InlineData(null, PipelineRole.All)]
     [InlineData(60, PipelineRole.Worker)]
@@ -176,6 +222,74 @@ public class RouteInventoryServiceTests
         finally
         {
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LocalDirectoryPoller_PatternThatThrows_IsAFailedListingNotAnException()
+    {
+        var root = Directory.CreateTempSubdirectory("fh-inventory-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "a"));
+            var poller = new LocalDirectoryPoller(new NoopQueue(), NullLogger<LocalDirectoryPoller>.Instance,
+                new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions
+                {
+                    Sources = [new FileSourceOptions { Name = "bad", Path = root, Pattern = "bad\0name", Recursive = true }]
+                }));
+
+            var listing = Assert.Single(await poller.ListSourceFoldersAsync(CancellationToken.None));
+
+            Assert.Equal("bad", listing.Source);
+            Assert.NotNull(listing.Error);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LocalDirectoryPoller_Cancelled_ThrowsInsteadOfReturningAPartialListing()
+    {
+        var root = Directory.CreateTempSubdirectory("fh-inventory-").FullName;
+        try
+        {
+            var poller = new LocalDirectoryPoller(new NoopQueue(), NullLogger<LocalDirectoryPoller>.Instance,
+                new OptionsMonitorStub<FileSourcesOptions>(new FileSourcesOptions { Sources = [new FileSourceOptions { Name = "in", Path = root }] }));
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poller.ListSourceFoldersAsync(new CancellationToken(canceled: true)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class StubPoller(IReadOnlyList<SourceFolderListing>? listings) : IFilePoller, ISourceFolderLister
+    {
+        public Task<Result> PollAsync(CancellationToken ct) => Task.FromResult(Result.Success());
+        public Task<IReadOnlyList<SourceFolderListing>> ListSourceFoldersAsync(CancellationToken ct)
+            => listings is null ? throw new InvalidOperationException("lister broke") : Task.FromResult(listings);
+    }
+
+    /// <summary>Waits for shutdown, then fails with a non-cancellation exception, as a client torn down mid-walk can.</summary>
+    private sealed class BlockingLister : ISourceFolderLister
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<IReadOnlyList<SourceFolderListing>> ListSourceFoldersAsync(CancellationToken ct)
+        {
+            Started.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new InvalidOperationException("connection closed");
+            }
+            return [];
         }
     }
 

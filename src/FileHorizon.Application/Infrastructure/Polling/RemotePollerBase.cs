@@ -479,25 +479,34 @@ public abstract class RemotePollerBase : IFilePoller, ISourceFolderLister
 
     /// <summary>
     /// Walks each enabled source's tree for the route inventory. A source that cannot be reached is
-    /// reported with its error rather than failing the whole inventory; it does not affect polling backoff.
+    /// reported with its error rather than failing the whole inventory, and is not put into backoff.
     /// </summary>
+    /// <remarks>
+    /// Each source is walked over its own connection, opened alongside the poller's. On a server that
+    /// allows one session per user the poll cycle's connect can then be refused while a walk runs, which
+    /// does put the source into backoff; leave the inventory off, or on a long interval, for such servers.
+    /// A cancelled walk throws instead of returning a partial listing, whose half-seen folders would look
+    /// like empty leaves.
+    /// </remarks>
     public async Task<IReadOnlyList<SourceFolderListing>> ListSourceFoldersAsync(CancellationToken ct)
     {
         var listings = new List<SourceFolderListing>();
         foreach (var source in GetEnabledSources())
         {
-            if (ct.IsCancellationRequested) break;
+            ct.ThrowIfCancellationRequested();
             try
             {
                 await using var client = CreateClient(source);
                 await client.ConnectAsync(ct).ConfigureAwait(false);
 
-                var collector = new RemoteFolderCollector(source.RemotePath, source.Recursive);
+                var collector = new FolderCollector(source.RemotePath, '/', source.Recursive);
                 await foreach (var entry in client.ListTreeAsync(source.RemotePath, source.Recursive, source.Pattern, ct).ConfigureAwait(false))
                 {
                     if (entry.IsDirectory) collector.AddDirectory(entry.FullPath);
                     else collector.AddFile(entry.FullPath);
                 }
+                // The clients end the listing quietly on cancellation; a partial walk must not become a listing.
+                ct.ThrowIfCancellationRequested();
 
                 var folders = collector.Folders()
                     .Select(dir => ProtocolIdentity.BuildKey(source.Protocol, client.Host, client.Port, dir))

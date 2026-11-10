@@ -638,4 +638,20 @@ public class RemotePollerTests
         Assert.Equal("connect fail", failed.Error);
         Assert.Empty(failed.Folders);
     }
+
+    [Fact]
+    public async Task ListSourceFoldersAsync_CancelledMidWalk_Throws()
+    {
+        var opts = CreateOptions(new FtpSourceOptions { Name = "partners", Host = "h", Port = 21, RemotePath = "/partners" });
+        using var cts = new CancellationTokenSource();
+        var now = DateTimeOffset.UtcNow;
+        // The fake ignores the token, like a real client that ends the listing quietly on cancellation.
+        var poller = new TestRemotePoller(new TestQueue(), opts, _ =>
+        {
+            cts.Cancel();
+            return new FakeRemoteClient("h", 21, [new FakeRemoteFile("/partners/acme", 0, now, IsDir: true)]);
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poller.ListSourceFoldersAsync(cts.Token));
+    }
 }

@@ -51,15 +51,16 @@ public sealed class LocalDirectoryPoller : IFilePoller, ISourceFolderLister
     }
 
     /// <summary>
-    /// Lists each source's folders for the route inventory: the root, plus (for a recursive source) every
-    /// folder below it that holds files matching the pattern or has no subfolders.
+    /// Lists each source's folders for the route inventory, with the same file selection as polling: the
+    /// root, plus (for a recursive source) every folder below it that holds files matching the pattern or
+    /// has no subfolders. A cancelled walk throws instead of returning a partial listing.
     /// </summary>
     public Task<IReadOnlyList<SourceFolderListing>> ListSourceFoldersAsync(CancellationToken ct)
     {
         var listings = new List<SourceFolderListing>();
         foreach (var source in _sourcesOptions.CurrentValue?.Sources ?? [])
         {
-            if (ct.IsCancellationRequested) break;
+            ct.ThrowIfCancellationRequested();
             var pattern = string.IsNullOrWhiteSpace(source.Pattern) ? "*.*" : source.Pattern;
             if (string.IsNullOrWhiteSpace(source.Path) || !Directory.Exists(source.Path))
             {
@@ -69,28 +70,27 @@ public sealed class LocalDirectoryPoller : IFilePoller, ISourceFolderLister
             try
             {
                 var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source.Path));
-                var folders = new List<string> { root };
+                var collector = new FolderCollector(root, Path.DirectorySeparatorChar, source.Recursive);
                 if (source.Recursive)
                 {
-                    foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+                    // One pass for folders and one for files, each opening every directory once.
+                    foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
                     {
-                        if (ct.IsCancellationRequested) break;
-                        if (!Directory.EnumerateDirectories(dir).Any() || Directory.EnumerateFiles(dir, pattern).Any())
-                        {
-                            folders.Add(dir);
-                        }
+                        ct.ThrowIfCancellationRequested();
+                        collector.AddDirectory(dir);
                     }
-                    // The root is reported like any other folder: only if it holds files or has no subfolders.
-                    if (Directory.EnumerateDirectories(root).Any() && !Directory.EnumerateFiles(root, pattern).Any())
+                    foreach (var file in Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories))
                     {
-                        folders.RemoveAt(0);
+                        ct.ThrowIfCancellationRequested();
+                        collector.AddFile(file);
                     }
                 }
-                var keys = folders.Select(f => ProtocolIdentity.BuildKey(ProtocolType.Local, string.Empty, 0, f)).ToList();
+                var keys = collector.Folders().Select(f => ProtocolIdentity.BuildKey(ProtocolType.Local, string.Empty, 0, f)).ToList();
                 listings.Add(new SourceFolderListing(source.Name, "local", pattern, Path.DirectorySeparatorChar, keys));
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                // Same isolation as polling: one unreadable source (or an invalid pattern) must not end the inventory.
                 listings.Add(SourceFolderListing.Failed(source.Name, "local", pattern, Path.DirectorySeparatorChar, ex.Message));
             }
         }

@@ -16,7 +16,8 @@ namespace FileHorizon.Application.Infrastructure.Telemetry;
 /// <remarks>
 /// Folders are judged with <see cref="RouteMatcher.MatchFolder"/>, the same rule matching the router uses.
 /// A rule that keys on file names is reported as <c>match=pattern-dependent</c>: some files in that folder
-/// may route elsewhere or nowhere. Only roles that poll run the inventory, since they own the sources.
+/// may route elsewhere or nowhere. Only roles that poll run the inventory, since they own the sources; it
+/// also needs the routing rules and destinations, which a split deployment usually keeps on the worker.
 /// </remarks>
 public sealed class RouteInventoryService(
     Func<ISourceFolderLister> lister,
@@ -48,7 +49,7 @@ public sealed class RouteInventoryService(
             {
                 break;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
                 logger.LogError(ex, "Route inventory run failed; retrying after {Interval}", interval);
                 try
@@ -68,6 +69,13 @@ public sealed class RouteInventoryService(
         using var activity = Common.Telemetry.TelemetryInstrumentation.ActivitySource.StartActivity("route.inventory", System.Diagnostics.ActivityKind.Internal);
 
         var rules = routing.CurrentValue.Rules;
+        if (rules.Count == 0)
+        {
+            // Typical for the poller of a split deployment, whose routing config lives on the worker. Without
+            // this, every folder of every source would log "unresolved" on each run.
+            logger.LogWarning("No routing rules on this instance; route inventory skipped. Give it the Routing and Destinations configuration, or leave Telemetry:RouteInventoryInterval unset here");
+            return;
+        }
         var destinationOptions = destinations.CurrentValue;
         var listings = await lister().ListSourceFoldersAsync(ct).ConfigureAwait(false);
 

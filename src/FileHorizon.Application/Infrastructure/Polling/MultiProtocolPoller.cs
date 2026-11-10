@@ -43,8 +43,16 @@ public sealed class MultiProtocolPoller(IEnumerable<IFilePoller> pollers, ILogge
         var listings = new List<SourceFolderListing>();
         foreach (var lister in _pollers.OfType<ISourceFolderLister>())
         {
-            if (ct.IsCancellationRequested) break;
-            listings.AddRange(await lister.ListSourceFoldersAsync(ct).ConfigureAwait(false));
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                listings.AddRange(await lister.ListSourceFoldersAsync(ct).ConfigureAwait(false));
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                // Isolated like PollAsync: one poller's failure must not hide the other pollers' sources.
+                _logger.LogError(ex, "Folder listing failed in poller {Poller}", lister.GetType().Name);
+            }
         }
         return listings;
     }

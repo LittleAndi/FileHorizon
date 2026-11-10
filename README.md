@@ -1055,18 +1055,30 @@ Route unresolved {Source} folder={Folder}: no rule would match files here      (
 Route inventory {Source} folders={Folders} resolved={Resolved} unresolved={Unresolved}
 ```
 
-- `folder` uses the same form as file paths in the per-file events.
+- `folder` uses the same form as file paths in the per-file events. On SFTP that is the server's
+  canonical path, so a symlinked `RemotePath` is reported under its target.
 - Folders are reported if they hold files matching the source `Pattern` or have no subfolders.
   Folders that only contain other folders (e.g. `/partners/acme` above `/partners/acme/ORDRSP`) are
   left out, so they do not show up as unresolved.
 - Rules are evaluated with the router's own matching, in the same first-match order.
 - `match=exact` means every file the source picks up in that folder takes this route. `match=pattern-dependent`
-  means the rule keys on file names (a glob file part narrower than the source `Pattern`, or any
-  `PathRegex`), so some files there may route elsewhere or nowhere.
-- A source that cannot be listed (connection failure, missing path) logs a warning; the other sources
-  still run.
-- Only roles that poll (`All`, `Poller`) run the inventory. It is off by default. Each run is a separate
-  walk of every source tree (on SFTP, a round trip per folder), so keep the interval coarse.
+  means the rule keys on file names (a glob file part narrower than the source `Pattern`), so some
+  files there may route elsewhere or nowhere.
+- A `PathRegex` cannot be judged without a real file name, so a rule with one is always
+  `pattern-dependent` for every folder its glob (if any) allows. Without a glob, such a rule claims
+  every folder, and folders after it in rule order never show as unresolved. Give regex rules a
+  `PathGlob` that limits them to their folders.
+- A source that cannot be listed (connection failure, missing path, invalid pattern) logs a warning;
+  the other sources still run.
+- It is off by default. Each run is a separate walk of every source tree (on SFTP, a round trip per
+  folder), so keep the interval coarse.
+- Each remote source is walked over its own connection, opened alongside the poller's. On a server
+  that allows one session per user, a poll that coincides with a walk is refused and the source goes
+  into backoff, so leave the inventory off, or on a long interval, for such servers.
+- The inventory needs both the sources and the routing rules. Only roles that poll (`All`, `Poller`)
+  run it. In a split deployment the routing config usually lives on the worker (as in
+  `docker-compose.yml`), so either give the poller the `Routing__*` and `Destinations__*` keys too or
+  leave the interval unset there. A poller with no rules logs one warning per run and skips the walk.
 
 ### Tag / Attribute Conventions (Initial)
 
