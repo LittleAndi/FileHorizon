@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using FileHorizon.Application.Abstractions;
 using FileHorizon.Application.Common;
+using FileHorizon.Application.Common.Telemetry;
 using FileHorizon.Application.Models;
 using Microsoft.Extensions.Logging;
 
@@ -36,18 +37,21 @@ public sealed class InMemoryFileEventQueue : IFileEventQueue
         if (validation.IsFailure)
         {
             _logger.LogDebug("Validation failed for file event {FileId}: {Error}", fileEvent?.Id, validation.Error);
+            TelemetryInstrumentation.QueueEnqueueFailures.Add(1);
             return Task.FromResult(Result.Failure(validation.Error));
         }
         if (ct.IsCancellationRequested)
         {
             _logger.LogDebug("Enqueue cancelled for file {FileId}", fileEvent.Id);
-            return Task.FromResult(Result.Failure(Error.Unspecified("Queue.EnqueueCancelled", "Enqueue was cancelled")));
+            TelemetryInstrumentation.QueueEnqueueFailures.Add(1);
+            return Task.FromResult(Result.Failure(Error.Transient("Queue.EnqueueCancelled", "Enqueue was cancelled")));
         }
 
         if (!_channel.Writer.TryWrite(fileEvent))
         {
             _logger.LogWarning("Failed to enqueue file event {FileId} - queue full/rejected", fileEvent.Id);
-            return Task.FromResult(Result.Failure(Error.Unspecified("Queue.Full", "Queue rejected the item")));
+            TelemetryInstrumentation.QueueEnqueueFailures.Add(1);
+            return Task.FromResult(Result.Failure(Error.Transient("Queue.Full", "Queue rejected the item")));
         }
         _logger.LogDebug("Enqueued file event {FileId}", fileEvent.Id);
         return Task.FromResult(Result.Success());

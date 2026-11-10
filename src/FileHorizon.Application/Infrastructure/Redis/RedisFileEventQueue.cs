@@ -90,7 +90,7 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
         if (ct.IsCancellationRequested)
         {
             TelemetryInstrumentation.QueueEnqueueFailures.Add(1);
-            return Result.Failure(Error.Unspecified("Queue.EnqueueCancelled", "Enqueue was cancelled"));
+            return Result.Failure(Error.Transient("Queue.EnqueueCancelled", "Enqueue was cancelled"));
         }
 
         var values = new NameValueEntry[]
@@ -124,7 +124,7 @@ public sealed class RedisFileEventQueue : IFileEventQueue, IAsyncDisposable
         {
             _logger.LogError(ex, "Failed to enqueue file event {FileId}", fileEvent.Id);
             TelemetryInstrumentation.QueueEnqueueFailures.Add(1);
-            return Result.Failure(Error.Unspecified("Redis.EnqueueFailed", ex.Message));
+            return Result.Failure(Error.Transient("Redis.EnqueueFailed", ex.Message));
         }
     }
 

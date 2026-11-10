@@ -79,5 +79,22 @@ public class InMemoryFileEventQueueTests
         var r = await queue.EnqueueAsync(invalid, CancellationToken.None);
         Assert.True(r.IsFailure);
         Assert.Equal(Error.Validation.EmptyId.Code, r.Error.Code);
+        // The remote pollers act on this classification: invalid means "never offer this version again".
+        Assert.True(r.Error.IsValidation);
+        Assert.False(r.Error.IsTransient);
+    }
+
+    [Fact]
+    public async Task Enqueue_Cancelled_Should_Return_Transient_Failure()
+    {
+        IFileEventQueue queue = new InMemoryFileEventQueue(NullLogger<InMemoryFileEventQueue>.Instance, new BasicFileEventValidator());
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var r = await queue.EnqueueAsync(NewEvent("one"), cts.Token);
+
+        Assert.True(r.IsFailure);
+        Assert.True(r.Error.IsTransient); // transient means "pause and offer the file again"
+        Assert.False(r.Error.IsValidation);
     }
 }

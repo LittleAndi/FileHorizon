@@ -35,6 +35,7 @@ Based on the current FileHorizon implementation, this document marks which metri
 ### **6. FTP/SFTP Servers** 🟨
 
 - What we have: Remote poll spans (`poll.remote.cycle`, `poll.remote.source`) and `poll.source.errors` counter. Discovery flows increment `files.discovered`.
+- `poll.source.errors` (tagged `file.protocol`, `poll.source`) counts failed client creation (including secret lookup), connects and listings. A rejected enqueue is counted by `queue.enqueue.failures` instead and does not increment it.
 - Connected vs total would benefit from a connect_success/connect_failure metric per source (tagged by source name).
 
 ### **7. Azure Service Bus** ❌

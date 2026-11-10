@@ -4,7 +4,6 @@ namespace FileHorizon.Application.Abstractions;
 
 public interface IRemoteFileClient : IAsyncDisposable
 {
-    ProtocolType Protocol { get; }
     string Host { get; }
     int Port { get; }
     Task ConnectAsync(CancellationToken ct);

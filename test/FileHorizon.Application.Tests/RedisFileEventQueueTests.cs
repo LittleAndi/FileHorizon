@@ -45,6 +45,27 @@ public class RedisFileEventQueueTests : IClassFixture<RedisTestFixture>
     }
 
     [Fact]
+    public async Task Enqueue_Failures_Are_Classified_For_The_Pollers()
+    {
+        if (!_fixture.Available) return;
+        var queue = _fixture.NewQueue();
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var cancelled = await queue.EnqueueAsync(NewEvent("one"), cts.Token);
+        Assert.True(cancelled.Error.IsTransient);
+
+        var invalid = await queue.EnqueueAsync(NewEvent("two") with { Id = "" }, CancellationToken.None);
+        Assert.True(invalid.Error.IsValidation);
+        Assert.False(invalid.Error.IsTransient);
+
+        await queue.DisposeAsync(); // the connection is gone: XADD now fails
+        var failed = await queue.EnqueueAsync(NewEvent("three"), CancellationToken.None);
+        Assert.Equal("Redis.EnqueueFailed", failed.Error.Code);
+        Assert.True(failed.Error.IsTransient);
+    }
+
+    [Fact]
     public async Task Enqueue_Multiple_Preserves_Order()
     {
         if (!_fixture.Available) return;

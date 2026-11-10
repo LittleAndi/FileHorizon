@@ -21,7 +21,6 @@ public sealed class FtpRemoteFileClient(ILogger<FtpRemoteFileClient> logger, str
     private readonly bool _allowInvalidCertificate = allowInvalidCertificate;
     private AsyncFtpClient? _client;
 
-    public ProtocolType Protocol => ProtocolType.Ftp;
     public string Host => _host;
     public int Port => _port;
 
