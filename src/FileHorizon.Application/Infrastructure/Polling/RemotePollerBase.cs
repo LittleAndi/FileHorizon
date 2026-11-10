@@ -361,7 +361,20 @@ public abstract class RemotePollerBase : IFilePoller
             Protocol: ProtocolTag(source),
             DestinationPath: destination,
             DeleteAfterTransfer: source.DeleteAfterTransfer);
-        var result = await _queue.EnqueueAsync(ev, ct).ConfigureAwait(false);
+        Result result;
+        try
+        {
+            result = await _queue.EnqueueAsync(ev, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            // The queues report failures as results, but a throw is possible (e.g. from a custom validator).
+            // It must not reach the listing catch, which would blame the source. There is no telling what it
+            // means, so it is reported as an unclassified rejection: this file is skipped and offered again.
+            _logger.LogError(ex, "Queue threw while enqueuing remote file {Key}", identityKey);
+            return Result.Failure(Error.Unspecified("Queue.EnqueueThrew", ex.Message));
+        }
+
         if (result.IsSuccess)
         {
             _logger.LogDebug("Enqueued remote file {Key} ({Protocol})", identityKey, source.Protocol);

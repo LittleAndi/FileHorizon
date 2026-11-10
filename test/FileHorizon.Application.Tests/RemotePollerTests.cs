@@ -55,10 +55,13 @@ public class RemotePollerTests
         public int RejectNext;
         /// <summary>Optional per-event rejection, checked before <see cref="RejectNext"/>.</summary>
         public Func<FileEvent, Error?>? RejectWith;
+        /// <summary>Optional per-event exception, thrown instead of returning a result.</summary>
+        public Func<FileEvent, Exception?>? ThrowFor;
         public Task<Result> EnqueueAsync(FileEvent fileEvent, CancellationToken ct)
         {
             // Like the real queues, validation comes first and is permanent for that event.
             if (fileEvent.Metadata.SizeBytes < 0) return Task.FromResult(Result.Failure(Error.Validation.NegativeSize));
+            if (ThrowFor?.Invoke(fileEvent) is { } exception) throw exception;
             if (RejectWith?.Invoke(fileEvent) is { } error) return Task.FromResult(Result.Failure(error));
             if (RejectNext > 0)
             {
@@ -423,6 +426,34 @@ public class RemotePollerTests
         refuseOdd = false;
         await poller.PollAsync(CancellationToken.None); // the refused file was not recorded, so it is offered again
 
+        ev = Assert.Single(queue.TryDrain(10));
+        Assert.EndsWith("/odd.txt", ev.Metadata.SourcePath);
+    }
+
+    [Fact]
+    public async Task PollAsync_QueueThrows_IsNotASourceFailureAndTheFileIsRetried()
+    {
+        var opts = CreateOptions(new FtpSourceOptions { Name = "f1", Host = "h", Port = 21, RemotePath = "/", Pattern = "*", MinStableSeconds = 0 });
+        var throwForOdd = true;
+        var queue = new TestQueue { ThrowFor = ev => throwForOdd && ev.Metadata.SourcePath.EndsWith("/odd.txt") ? new InvalidOperationException("validator blew up") : null };
+        var mtime = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var clientsCreated = 0;
+        var poller = new TestRemotePoller(queue, opts, _ =>
+        {
+            clientsCreated++;
+            return new FakeRemoteClient("h", 21, new[] { new FakeRemoteFile("/odd.txt", 1, mtime), new FakeRemoteFile("/ok.txt", 1, mtime) });
+        }, new ManualTimeProvider());
+
+        var errors = await CaptureSourceErrorsAsync(() => poller.PollAsync(CancellationToken.None));
+
+        Assert.Empty(errors);
+        var ev = Assert.Single(queue.TryDrain(10));
+        Assert.EndsWith("/ok.txt", ev.Metadata.SourcePath);
+
+        throwForOdd = false;
+        await poller.PollAsync(CancellationToken.None); // no backoff on the source, and the file is offered again
+
+        Assert.Equal(2, clientsCreated);
         ev = Assert.Single(queue.TryDrain(10));
         Assert.EndsWith("/odd.txt", ev.Metadata.SourcePath);
     }

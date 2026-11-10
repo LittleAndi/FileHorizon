@@ -58,6 +58,7 @@ public readonly record struct Error(string Code, string Message)
     /// <summary>
     /// True when the failure lies with the service that was called rather than with the input (it is
     /// unreachable, full, timed out), so the same input can succeed later. Only set where the producer knows.
+    /// It is part of the error's value: two errors that differ only in this flag are not equal.
     /// </summary>
     public bool IsTransient { get; init; }
 
@@ -99,7 +100,7 @@ public readonly record struct Error(string Code, string Message)
         public static Error AlreadyExists(string path) => new("Storage.AlreadyExists", $"Blob already exists: {path}");
         public static Error ContainerMissing(string container) => new("Storage.ContainerMissing", $"Blob container not found: {container}");
         public static Error Authorization(string message) => new("Storage.Authorization", message);
-        public static Error UploadTransient(string message) => new("Storage.UploadTransient", message);
+        public static Error UploadTransient(string message) => Transient("Storage.UploadTransient", message);
         public static Error UploadError(string message) => new("Storage.UploadError", message);
     }
 
@@ -107,7 +108,7 @@ public readonly record struct Error(string Code, string Message)
     {
         public static readonly Error DestinationEmpty = new("Messaging.DestinationEmpty", "DestinationName must be provided.");
         public static readonly Error ContentEmpty = new("Messaging.ContentEmpty", "Content must not be empty.");
-        public static Error PublishTransient(string message) => new("Messaging.PublishTransient", message);
+        public static Error PublishTransient(string message) => Transient("Messaging.PublishTransient", message);
         public static Error PublishError(string message) => new("Messaging.PublishError", message);
     }
 }
