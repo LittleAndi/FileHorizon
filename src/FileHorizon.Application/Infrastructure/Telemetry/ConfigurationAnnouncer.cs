@@ -147,7 +147,7 @@ public sealed class ConfigurationAnnouncer(
     /// Where a destination writes: the Service Bus entity, blob container (and prefix), or root path.
     /// Only called once <see cref="SimpleFileRouter.FindDestinationKind"/> has found the destination.
     /// </summary>
-    private static string? ResolveEntity(DestinationsOptions options, DestinationKind kind, string name)
+    internal static string? ResolveEntity(DestinationsOptions options, DestinationKind kind, string name)
     {
         bool Named(string candidate) => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase);
         switch (kind)

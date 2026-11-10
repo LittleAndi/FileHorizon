@@ -210,6 +210,10 @@ public static class ServiceCollectionExtensions
         // Registered before the pipeline so the configuration is announced before the first poll or route.
         services.AddSingleton<Infrastructure.Telemetry.ConfigurationAnnouncer>();
         services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<Infrastructure.Telemetry.ConfigurationAnnouncer>());
+        // Off unless Telemetry:RouteInventoryInterval is set. The lister is resolved lazily so a Worker never builds the pollers.
+        services.AddSingleton<Abstractions.ISourceFolderLister>(sp => sp.GetRequiredService<Infrastructure.Polling.MultiProtocolPoller>());
+        services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<Infrastructure.Telemetry.RouteInventoryService>(
+            sp, (Func<Abstractions.ISourceFolderLister>)(() => sp.GetRequiredService<Abstractions.ISourceFolderLister>())));
 
         // Composite hosted service decides at runtime which underlying services to start.
         services.AddSingleton<IHostedService>(sp =>

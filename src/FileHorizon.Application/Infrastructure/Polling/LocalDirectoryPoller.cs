@@ -12,7 +12,7 @@ namespace FileHorizon.Application.Infrastructure.Polling;
 /// Polls configured local directories for files matching patterns and enqueues new file events.
 /// Simple, non-recursive change detection using last seen snapshot; future improvements may use FS watchers.
 /// </summary>
-public sealed class LocalDirectoryPoller : IFilePoller
+public sealed class LocalDirectoryPoller : IFilePoller, ISourceFolderLister
 {
     private readonly IFileEventQueue _queue;
     private readonly ILogger<LocalDirectoryPoller> _logger;
@@ -48,6 +48,53 @@ public sealed class LocalDirectoryPoller : IFilePoller
         }
 
         return Result.Success();
+    }
+
+    /// <summary>
+    /// Lists each source's folders for the route inventory, with the same file selection as polling: the
+    /// root, plus (for a recursive source) every folder below it that holds files matching the pattern or
+    /// has no subfolders. A cancelled walk throws instead of returning a partial listing.
+    /// </summary>
+    public Task<IReadOnlyList<SourceFolderListing>> ListSourceFoldersAsync(CancellationToken ct)
+    {
+        var listings = new List<SourceFolderListing>();
+        foreach (var source in _sourcesOptions.CurrentValue?.Sources ?? [])
+        {
+            ct.ThrowIfCancellationRequested();
+            var pattern = string.IsNullOrWhiteSpace(source.Pattern) ? "*.*" : source.Pattern;
+            if (string.IsNullOrWhiteSpace(source.Path) || !Directory.Exists(source.Path))
+            {
+                listings.Add(SourceFolderListing.Failed(source.Name, "local", pattern, Path.DirectorySeparatorChar, $"path invalid or does not exist: {source.Path}"));
+                continue;
+            }
+            try
+            {
+                var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source.Path));
+                var collector = new FolderCollector(root, Path.DirectorySeparatorChar, source.Recursive);
+                if (source.Recursive)
+                {
+                    // One pass for folders and one for files, each opening every directory once.
+                    foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        collector.AddDirectory(dir);
+                    }
+                    foreach (var file in Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        collector.AddFile(file);
+                    }
+                }
+                var keys = collector.Folders().Select(f => ProtocolIdentity.BuildKey(ProtocolType.Local, string.Empty, 0, f)).ToList();
+                listings.Add(new SourceFolderListing(source.Name, "local", pattern, Path.DirectorySeparatorChar, keys));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Same isolation as polling: one unreadable source (or an invalid pattern) must not end the inventory.
+                listings.Add(SourceFolderListing.Failed(source.Name, "local", pattern, Path.DirectorySeparatorChar, ex.Message));
+            }
+        }
+        return Task.FromResult<IReadOnlyList<SourceFolderListing>>(listings);
     }
 
     private async Task ProcessSourceAsync(FileSourceOptions source, CancellationToken ct)

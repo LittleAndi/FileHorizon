@@ -99,7 +99,13 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
         return client;
     }
 
-    public async IAsyncEnumerable<IRemoteFileInfo> ListFilesAsync(string path, bool recursive, string pattern, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    public IAsyncEnumerable<IRemoteFileInfo> ListFilesAsync(string path, bool recursive, string pattern, CancellationToken ct)
+        => ListAsync(path, recursive, pattern, includeDirectories: false, ct);
+
+    public IAsyncEnumerable<IRemoteFileInfo> ListTreeAsync(string path, bool recursive, string pattern, CancellationToken ct)
+        => ListAsync(path, recursive, pattern, includeDirectories: true, ct);
+
+    private async IAsyncEnumerable<IRemoteFileInfo> ListAsync(string path, bool recursive, string pattern, bool includeDirectories, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         if (_client is null) throw new InvalidOperationException("Client not connected");
         foreach (var entry in _client.ListDirectory(path))
@@ -109,7 +115,11 @@ public sealed class SftpRemoteFileClient : IRemoteFileClient
             {
                 if (recursive && !IsDotDir(entry.Name))
                 {
-                    await foreach (var child in ListFilesAsync(entry.FullName, true, pattern, ct))
+                    if (includeDirectories)
+                    {
+                        yield return new SftpRemoteFileInfo(entry.FullName, entry.Name, 0, entry.LastWriteTimeUtc, true);
+                    }
+                    await foreach (var child in ListAsync(entry.FullName, true, pattern, includeDirectories, ct))
                     {
                         yield return child;
                     }

@@ -6,6 +6,9 @@ public sealed class TelemetryOptionsValidator : IValidateOptions<TelemetryOption
 {
     private static readonly string[] AllowedProtocols = ["grpc", "httpprotobuf", "http/protobuf"];
 
+    // Each run walks every source tree (a network round trip per folder on SFTP), so keep it coarse.
+    internal static readonly TimeSpan MinRouteInventoryInterval = TimeSpan.FromMinutes(1);
+
     public ValidateOptionsResult Validate(string? name, TelemetryOptions options)
     {
         if (options is null) return ValidateOptionsResult.Fail("TelemetryOptions instance is null");
@@ -16,6 +19,11 @@ public sealed class TelemetryOptionsValidator : IValidateOptions<TelemetryOption
         if (options.TracesSampleRatio is { } ratio && !(ratio >= 0 && ratio <= 1))
         {
             errors.Add($"Telemetry: TracesSampleRatio must be between 0 and 1, but was {ratio}");
+        }
+
+        if (options.RouteInventoryInterval is { } interval && interval < MinRouteInventoryInterval)
+        {
+            errors.Add($"Telemetry: RouteInventoryInterval must be at least {MinRouteInventoryInterval}, but was {interval}");
         }
 
         var protocol = options.OtlpProtocol?.Trim();
